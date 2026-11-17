@@ -6,16 +6,16 @@ function allowed(url) {
   try {
     const p = new URL(url);
     if (p.protocol !== "https:" || p.username || p.password || p.port) return false;
-    if (p.hostname === "lista.mercadolivre.com.br") return /^\/[^/]+\/?$/.test(p.pathname);
+    if (p.hostname === "lista.mercadolivre.com.br") return /^\/(?:[^/]+\/){0,3}[^/]+\/?$/.test(p.pathname);
     return ["www.mercadolivre.com.br", "produto.mercadolivre.com.br", "mercadolivre.com.br"].includes(p.hostname) &&
       /(?:^|[/\-])MLB-?\d+(?:$|[/\-])/i.test(p.pathname);
   } catch { return false; }
 }
 
-async function request(action, data = {}) {
+async function request(action, data = {}, timeout = 4500) {
   const response = await fetch(base + action, {
     method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data),
-    signal:AbortSignal.timeout(4500),
+    signal:AbortSignal.timeout(timeout),
   });
   if (!response.ok) throw new Error("Painel indisponível");
   return response.json();
@@ -41,7 +41,14 @@ function capture() {
     return copy.outerHTML;
   }
   const snippets = nodes.slice(0, 80).map(clean);
-  if (!cardNodes.length) {
+  const priceSelector = ".ui-pdp-price__second-line, .poly-price__current, .ui-search-price__second-line";
+  const priced = nodes.some(node => {
+    if (node.matches(".ui-search-no-results")) return true;
+    const price = node.matches(priceSelector) ? node : node.querySelector(priceSelector);
+    return price && (price.querySelector(".andes-money-amount__fraction, [aria-label*='reais']") ||
+      /R\$\s*\d/.test(price.textContent));
+  });
+  if (!priced) {
     const embedded = document.getElementById("__NORDIC_RENDERING_CTX__")?.textContent || "";
     const objectStart = embedded.indexOf("{");
     const objectEnd = embedded.lastIndexOf("}");
@@ -83,30 +90,46 @@ function capture() {
       } catch {}
     }
   }
-  if (snippets.length) return {status:"ok", html:snippets.join("").slice(0, 1_500_000), url: location.href};
+
   const text = (document.body?.innerText || "").slice(0, 4000);
   const blocked = document.querySelector("iframe[src*='captcha'], .g-recaptcha, .h-captcha, form[action*='auth.mercadolivre']") ||
     /verifique se você é humano|confirme que você é humano|verificação de segurança|verifique sua identidade|access denied|hubo un error accediendo/i.test(text);
-  return {status:blocked ? "verification" : "empty"};
+  if (blocked) return {status:"verification"};
+  if (priced || snippets.length > nodes.slice(0, 80).length) {
+    return {status:"ok", html:snippets.join("").slice(0, 1_500_000), url:location.href};
+  }
+  return {status:"empty"};
 }
 
 async function navigate(url) {
   if (!allowed(url)) return {status:"error"};
   const tab = await chrome.tabs.create({url, active:false});
+  let windowId;
   try {
+    await chrome.tabs.update(tab.id, {autoDiscardable:false}).catch(() => {});
+
     for (let attempt = 0; attempt < 25; attempt++) {
       const current = await chrome.tabs.get(tab.id);
       if (current.status === "complete" && current.url) {
-        if (!allowed(current.url)) return {status:"verification"};
+        if (!allowed(current.url)) {
+          const host = new URL(current.url).hostname;
+          return {status:host === "auth.mercadolivre.com.br" ? "verification" : "error"};
+        }
         const result = await chrome.scripting.executeScript({target:{tabId:tab.id}, func:capture});
         const data = result[0]?.result;
         if (data && data.status !== "empty") return data;
+      }
+      if (attempt === 9) {
+        // Give the existing page its own active tab without taking keyboard focus.
+        const window = await chrome.windows.create({tabId:tab.id, focused:false, type:"normal"});
+        windowId = window?.id;
       }
       await delay(650);
     }
     return {status:"empty"};
   } finally {
-    await chrome.tabs.remove(tab.id).catch(() => {});
+    try { await chrome.tabs.remove(tab.id); }
+    catch { if (windowId != null) await chrome.windows.remove(windowId).catch(() => {}); }
   }
 }
 
@@ -115,7 +138,7 @@ async function tick() {
   running = true;
   try {
     for (let i = 0; i < 4; i++) {
-      const {job} = await request("next");
+      const {job} = await request("next", {wait:i === 0}, 18000);
       if (!job) break;
       let result;
       try { result = await navigate(job.url); }
@@ -128,13 +151,19 @@ async function tick() {
   } finally { running = false; }
 }
 
-async function start() {
+async function ensureAlarm() {
   if (!await chrome.alarms.get("vigia")) await chrome.alarms.create("vigia", {periodInMinutes:0.5});
-  await tick();
 }
-chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === "vigia") void tick(); });
+
+function start() {
+  void ensureAlarm().catch(() => {});
+  void tick();
+}
+
+chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === "vigia") start(); });
 chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message === "consultar" && sender.url?.startsWith("http://127.0.0.1:8765/")) void tick();
+  if (message === "consultar" && sender.url?.startsWith("http://127.0.0.1:8765/")) start();
 });
-chrome.runtime.onInstalled.addListener(() => void start());
-chrome.runtime.onStartup.addListener(() => void start());
+chrome.runtime.onInstalled.addListener(start);
+chrome.runtime.onStartup.addListener(start);
+void ensureAlarm().catch(() => {});

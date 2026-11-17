@@ -35,6 +35,8 @@ def string(body, key, limit=160):
 
 def money(body, key, required=False):
     raw = body.get(key)
+    if isinstance(raw, str) and re.fullmatch(r"(?:R\$\s*)?\d{1,3}(?:\.\d{3})+", raw.strip()):
+        raw = raw.replace(".", "")
     value = cents(raw)
     if (required and value is None) or (raw not in (None, "") and value is None):
         raise ValueError("Confira o valor do campo " + key + ".")
@@ -67,7 +69,8 @@ def watch_from(body):
         raise ValueError("Escolha à vista ou parcelado.")
     return dict(name=string(body, "name") or query, query=query, category=string(body, "category", 40) or "Outros",
                 exclude=string(body, "exclude", 200), stores=["meli"],
-                target=money(body, "target"), mode=mode, provisional=bool(body.get("provisional")))
+                target=money(body, "target"), mode=mode, provisional=bool(body.get("provisional")),
+                target_scope="product" if body.get("target_scope") == "product" else "delivery")
 
 def coupon_from(body, watches):
     code = string(body, "code", 45).upper()
@@ -166,6 +169,36 @@ def calc(offer, watch_id, mode, state):
                 sim_discount=estimate if estimate > confirmed else 0, sim_codes=sim_codes if estimate > confirmed else [],
                 advertised_coupon=advertised_coupon, shipping_estimate=shipping_estimate,
                 estimated_total=None if shipping_estimate is None else base + shipping_estimate - confirmed)
+
+def target_match(payment, watch):
+    limit = watch["target"]
+    if limit is None:
+        return {"kind": "open", "amount": None, "note": ""}
+    if payment["base"] is None:
+        return {"kind": "unknown", "amount": None, "note": ""}
+    delivery = watch.get("target_scope", "delivery") != "product"
+    conditional = payment.get("advertised_coupon", False)
+    freight = payment["freight"] if delivery else 0
+    estimate = payment.get("shipping_estimate") if delivery else None
+    if freight is not None and not conditional:
+        confirmed = payment["subtotal"] + freight
+        if confirmed <= limit:
+            return {"kind": "final", "amount": confirmed, "note": ""}
+    elif payment["subtotal"] <= limit and freight is None and not watch.get("provisional"):
+        return {"kind": "unknown", "amount": None, "note": ""}
+    projected = payment["subtotal"] + (freight if freight is not None else (estimate or 0)) - payment["sim_discount"]
+    pending = []
+    if freight is None:
+        pending.append("frete")
+    if conditional:
+        pending.append("cupom anunciado")
+    if payment["sim_codes"]:
+        pending.append("cupom " + " + ".join(payment["sim_codes"]))
+    if projected <= limit and pending:
+        return {"kind": "provisional" if watch.get("provisional") else "unknown",
+                "amount": projected, "note": "Conferir " + " e ".join(pending)}
+    return {"kind": "above", "amount": projected, "note": ""}
+
 
 class App:
     def __init__(self, directory, config):
@@ -307,21 +340,9 @@ class App:
                     status = state["scans"].get(watch_id, {}).get(o["store"], {})
                     if status.get("state") != "ok" or not self.providers.enabled(o["store"]):
                         continue
-                p = calc(o, watch_id, watch["mode"], state)
-                if p["total"] is not None and p["total"] <= watch["target"]:
-                    options["final"].append((p["total"], o, ""))
-                elif watch.get("provisional") and p["base"] is not None:
-                    amount = p["simulation"] if p["freight"] is not None else p["subtotal"] + (p.get("shipping_estimate") or 0) - p["sim_discount"]
-                    if amount is not None and amount <= watch["target"]:
-                        pending = []
-                        if p["freight"] is None:
-                            pending.append("frete")
-                        if p.get("advertised_coupon"):
-                            pending.append("cupom anunciado")
-                        if p["sim_codes"]:
-                            pending.append("cupom " + " + ".join(p["sim_codes"]))
-                        if pending:
-                            options["provisional"].append((amount, o, "Conferir " + " e ".join(pending)))
+                match = target_match(calc(o, watch_id, watch["mode"], state), watch)
+                if match["kind"] in options:
+                    options[match["kind"]].append((match["amount"], o, match["note"]))
         for kind in options:
             candidates = options[kind]
             flag = "under" if kind == "final" else "provisional_under"
@@ -329,7 +350,7 @@ class App:
                 amount, offer, note = min(candidates, key=lambda x: x[0])
                 state["alerts"].insert(0, dict(price=amount, name=watch["name"], title=offer["title"],
                     store=offer["store"], url=offer["url"], watch=watch_id, time=now(), mode=watch["mode"], external=offer.get("external", False),
-                    id=uuid4().hex, read=False, note=note))
+                    id=uuid4().hex, read=False, note=note, target_scope=watch.get("target_scope", "delivery")))
                 del state["alerts"][200:]
             watch[flag] = bool(candidates)
 
@@ -353,10 +374,15 @@ class App:
             state["offers"] = {}
             for w in state["watches"]:
                 state["watches"][w]["links"] = {s: url_for(s, state["watches"][w]["query"]) for s in state["watches"][w]["stores"]}
-                state["offers"][w] = [{"id": key, **record["history"][-1], "active": record["active"],
-                    **{m: calc(record["history"][-1], w, m, state) for m in ("cash", "card")},
-                    "history": [{"time": h.get("first_seen", h["time"]), "price": h["price"]} for h in record["history"]]}
-                    for key, record in self.state["offers"].get(w, {}).items()]
+                offers = []
+                watch = state["watches"][w]
+                for key, record in self.state["offers"].get(w, {}).items():
+                    offer = record["history"][-1]
+                    payments = {m: calc(offer, w, m, state) for m in ("cash", "card")}
+                    offers.append({"id": key, **offer, "active": record["active"], **payments,
+                        "target_match": target_match(payments[watch["mode"]], watch),
+                        "history": [{"time": h.get("first_seen", h["time"]), "price": h["price"]} for h in record["history"]]})
+                state["offers"][w] = offers
             state["sources"] = {s: self.providers.enabled(s) for s in STORES}
             state["coupon_sources"] = {key: store for key, (store, _) in campanhas.sources(self.cfg).items() if store == "meli"}
             state["coupons_running"] = self.coupons_running
@@ -373,7 +399,8 @@ class App:
                 offers = self.providers.scan(store, watch, settings)
             return offers, dict(state="ok", count=len(offers), time=now())
         except ProviderError as exc:
-            return [], dict(state="error", message=str(exc), time=now())
+            return [], dict(state="error", message=str(exc), time=now(),
+                            retry_after={503: 120, 429: 900}.get(exc.status))
         except Exception as exc:
             return [], dict(state="error", message="Formato inesperado da fonte (" + type(exc).__name__ + ").", time=now())
 
@@ -382,13 +409,13 @@ class App:
         result = self.browser.query(url)
         status = result["status"]
         if status == "verification":
-            raise ProviderError("O Mercado Livre apresentou uma verificação de acesso. A vigia pelo navegador foi pausada por 15 minutos.")
+            raise ProviderError("O Mercado Livre apresentou uma verificação de acesso. A vigia pelo navegador foi pausada por 15 minutos.", status=429)
         if status != "ok":
             messages = {"busy": "Há consultas em andamento. Tente novamente.",
                         "timeout": "O navegador não respondeu a tempo. Confira se a extensão e o navegador estão abertos.",
                         "empty": "O navegador abriu a página, mas o Mercado Livre não exibiu ofertas legíveis.",
                         "error": "A extensão não conseguiu abrir a página do Mercado Livre."}
-            raise ProviderError(messages[status])
+            raise ProviderError(messages[status], status=503 if status in ("timeout", "busy", "error") else None)
         detail = not url.startswith("https://lista.mercadolivre.com.br/")
         if detail:
             source_url = meli_publico.product_url(result.get("url"), url) if result.get("url") else ""
@@ -403,14 +430,14 @@ class App:
     def browser_action(self, path, body):
         if path == "/api/browser-next":
             connected = self.browser.connected()
-            job = self.browser.next_job()
             if not connected:
                 with self.lock:
                     for wid, checks in self.state["scans"].items():
                         watch = self.state["watches"].get(wid)
                         if watch and checks.get("meli", {}).get("state") == "error":
                             watch["last_attempt"] = 0
-            return {"job": job}
+                            watch.pop("retry_at", None)
+            return {"job": self.browser.next_job(wait=body.get("wait") is True)}
         status = body.get("status")
         if status not in ("ok", "empty", "error", "verification"):
             raise ValueError("Resultado da extensão inválido.")
@@ -505,7 +532,7 @@ class App:
                 jobs = [(wid, w.copy()) for wid, w in self.state["watches"].items()
                         if (w["active"] or watch_id == wid) and (not watch_id or watch_id == wid)
                         and any(self.providers.enabled(s) for s in w["stores"])
-                        and (force or now() >= w.get("last_attempt", 0) + interval)]
+                        and (force or now() >= w.get("retry_at", w.get("last_attempt", 0) + interval))]
             for wid, w in jobs:
                 for s in w["stores"]:
                     if not self.providers.enabled(s):
@@ -517,6 +544,7 @@ class App:
                             break
                         self.state["scans"].setdefault(wid, {})[s] = status
                         if status["state"] == "ok":
+                            current.pop("retry_at", None)
                             for rec in self.state["offers"].get(wid, {}).values():
                                 last = rec["history"][-1]
                                 if last["source"] == "auto" and last["store"] == s:
@@ -524,6 +552,8 @@ class App:
                             for o in offers:
                                 self.save_offer(wid, o, "auto")
                             self.evaluate_public_coupons(wid, offers)
+                        else:
+                            current["retry_at"] = now() + (status.get("retry_after") or interval)
                         self.commit()
                 with self.lock:
                     current = self.state["watches"].get(wid)
@@ -543,7 +573,7 @@ class App:
         while True:
             with self.lock:
                 s = self.state
-                due = any(w["active"] and now() >= w.get("last_attempt", 0) + s["settings"]["interval"] * 60
+                due = any(w["active"] and now() >= w.get("retry_at", w.get("last_attempt", 0) + s["settings"]["interval"] * 60)
                           and any(self.providers.enabled(store) for store in w["stores"]) for w in s["watches"].values())
             if due:
                 self.trigger(force=False)
@@ -565,6 +595,7 @@ class App:
                 if settings["cep"] != s["settings"]["cep"]:
                     for w in s["watches"].values():
                         w["last_attempt"] = 0
+                        w.pop("retry_at", None)
                 s["settings"] = settings
             elif action == "watch":
                 w = watch_from(b)
@@ -578,14 +609,17 @@ class App:
                         if record["history"][-1]["source"] == "auto":
                             record["active"] = False
                 s["coupon_checks"].clear()
+                same_target = all(w[k] == previous.get(k, "delivery" if k == "target_scope" else None)
+                                  for k in ("target", "mode", "provisional", "target_scope"))
                 s["watches"][wid] = {**w, "active": previous.get("active", True), "rev": uuid4().hex,
-                                     "under": previous.get("under", False), "provisional_under": previous.get("provisional_under", False), "last_attempt": 0}
+                                     "under": same_target and previous.get("under", False), "provisional_under": same_target and previous.get("provisional_under", False), "last_attempt": 0}
             elif action in ("toggle", "delete", "offer", "remove-offer"):
                 if wid not in s["watches"]:
                     raise ValueError("Produto não encontrado.")
                 w = s["watches"][wid]
                 if action == "toggle":
                     w.update(active=not w["active"], last_attempt=0, rev=uuid4().hex)
+                    w.pop("retry_at", None)
                     if w["active"]:
                         s["coupon_checks"].clear()
                 elif action == "delete":

@@ -16,18 +16,22 @@ class BrowserBridge:
         with self.condition:
             return self.last_poll is not None and time.monotonic() - self.last_poll < 90
 
-    def next_job(self):
+    def next_job(self, wait=False):
         with self.condition:
             self.last_poll = time.monotonic()
-            if self.pause_until > self.last_poll:
-                return None
-            if any(job["claimed"] and job["answer"] is None for job in self.jobs.values()):
-                return None
-            for key, job in self.jobs.items():
-                if not job["claimed"]:
-                    job["claimed"] = True
-                    return {"id": key, "url": job["url"]}
-            return None
+            deadline = self.last_poll + (12 if wait else 0)
+            while True:
+                if self.pause_until > time.monotonic():
+                    return None
+                if not any(job["claimed"] and job["answer"] is None for job in self.jobs.values()):
+                    for key, job in self.jobs.items():
+                        if not job["claimed"]:
+                            job["claimed"] = True
+                            return {"id": key, "url": job["url"]}
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self.condition.wait(remaining)
 
     def complete(self, key, result):
         with self.condition:
@@ -48,8 +52,10 @@ class BrowserBridge:
                 return {"status": "busy"}
             key = uuid4().hex
             job = self.jobs[key] = {"url": url, "claimed": False, "answer": None}
+            self.condition.notify_all()
             try:
                 self.condition.wait_for(lambda: job["answer"] is not None, timeout=60)
                 return job["answer"] or {"status": "timeout"}
             finally:
                 self.jobs.pop(key, None)
+                self.condition.notify_all()

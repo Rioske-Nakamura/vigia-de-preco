@@ -18,9 +18,11 @@ O painel consulta o Mercado Livre sem chave de API. Se o navegador estiver conec
 3. Ative o **Modo do desenvolvedor**, clique em **Carregar sem compactação** e selecione a pasta `extensao` deste projeto. Faça isso uma vez.
 4. Em **Configurações** do Vigia, confira se aparece **Navegador conectado**. Use **Buscar preços** ou deixe as vigias rodarem no intervalo configurado.
 
-A extensão abre uma aba em segundo plano, lê os dados dos anúncios do Mercado Livre e fecha a aba. Os resultados voltam ao servidor deste computador. Mantenha o servidor e o navegador abertos, com a extensão ativada. A extensão usa o endereço e a porta padrão. Quando o Mercado Livre apresentar uma verificação de acesso, a extensão encerra a tentativa e pausa as consultas por 15 minutos.
+A extensão abre uma aba em segundo plano, lê os dados dos anúncios do Mercado Livre e fecha a aba. Se os preços demorarem a renderizar, ela move a consulta para uma janela temporária, aberta sem pedir foco. Depois de atualizar o projeto, recarregue a extensão para aplicar as mudanças. Os resultados voltam ao servidor deste computador. Mantenha o servidor e o navegador abertos, com a extensão ativada. A extensão usa o endereço e a porta padrão. Quando o Mercado Livre apresentar uma verificação de acesso, a extensão encerra a tentativa e pausa as consultas por 15 minutos.
 
 ## Preços, parcelas e frete
+
+Em cada vigia você pode escolher se o preço-alvo considera o produto ou o total com frete, e se vale para pagamento à vista ou parcelado. As ofertas que passam da meta ou que ficam sem preço comparável aparecem recolhidas. Se você ativar o aviso estimado, frete e cupons pendentes são sinalizados como estimativas.
 
 - O preço da página e o preço anterior aparecem quando anunciados. O total parcelado usa o total exibido na loja ou a quantidade de parcelas multiplicada pelo valor unitário.
 - O frete anunciado soma ao subtotal como **estimativa**. Sem valor reconhecível, aparece o subtotal mais frete a confirmar.

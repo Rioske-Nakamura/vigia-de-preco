@@ -184,13 +184,20 @@ function watchRow(id, w) {
   ));
   const imported = offers.filter(o => o.source === "import" && o.active);
   const history = offers.filter(o => !active(id, o) && !(o.source === "import" && o.active)).sort((a,b) => b.time-a.time);
-  const first = current.find(o => o[m].total != null);
+  const matching = w.target == null ? current : current.filter(o => ["final", "provisional"].includes(o.target_match.kind))
+    .sort((a,b) => (a.target_match.kind === "provisional") - (b.target_match.kind === "provisional") ||
+      a.target_match.amount - b.target_match.amount);
+  const other = w.target == null ? [] : current.filter(o => !["final", "provisional"].includes(o.target_match.kind));
+  const first = w.target == null ? current.find(o => o[m].total != null) : matching[0];
+  const firstPrice = w.target == null ? first?.[m].total : first?.target_match.amount;
+  const firstLabel = w.target == null ? "menor total " + (m === "cash" ? "à vista" : "parcelado") :
+    first?.target_match.kind === "provisional" ? "meta estimada" : "dentro da meta";
   const tags = `data-id="${id}"`;
   return `<details class="watch card" data-watch="${id}" ${expanded.has(id) ? "open" : ""}>
   <summary>${icon(ICONS[CATEGORIES.indexOf(w.category)] || "◈")}
-    <span class="name"><strong>${esc(w.name)}</strong><small>${esc(w.category)} · Meta ${w.target == null ? "livre" : cur(w.target)} · ${w.mode === "cash" ? "à vista" : "parcelado"}</small></span>
+    <span class="name"><strong>${esc(w.name)}</strong><small>${esc(w.category)} · Meta ${w.target == null ? "livre" : cur(w.target)} · ${w.mode === "cash" ? "à vista" : "parcelado"}${w.target == null ? "" : w.target_scope === "product" ? " · sem frete" : " · com frete"}</small></span>
     ${badge(w.active ? "Ativa" : "Pausada", w.active ? "ok" : "warn")}
-    <span class="amount">${first ? cur(first[m].total) : "—"}<small>${first ? "menor total " + (m === "cash" ? "à vista" : "parcelado") : "total pendente"}</small></span>
+    <span class="amount">${firstPrice != null ? cur(firstPrice) : "—"}<small>${first ? firstLabel : w.target == null ? "total pendente" : "sem oferta na meta"}</small></span>
   </summary>
   <div class="watch-body"><div class="actions">
     ${button("scan-one","↻ Atualizar","secondary small",tags)}
@@ -207,7 +214,8 @@ function watchRow(id, w) {
   }).join("")}
   ${w.stores.includes("meli") ? importControl(id) : ""}
   <h3>Comparação de ofertas</h3>
-  ${current.length ? offerTable(id,current) : '<p class="hint">Sem ofertas atuais. Se o Mercado Livre recusar a consulta, abra a busca na loja.</p>'}
+  ${matching.length ? offerTable(id,matching) : `<p class="hint">${current.length ? "Nenhuma oferta atende ao limite de preço definido para esta vigia." : "Sem ofertas atuais."}</p>`}
+  ${other.length ? `<details><summary>Ofertas acima da meta ou sem preço comparável (${other.length})</summary>${offerTable(id,other)}</details>` : ""}
   ${imported.length ? `<h3>Ofertas da página importada</h3><p class="hint">Preços da página salva. Confira se continuam válidos na loja.</p>${offerTable(id,imported)}` : ""}
   ${history.length ? `<details><summary>Resultados anteriores e indisponíveis (${history.length})</summary>${offerTable(id,history)}</details>` : ""}
   </div></details>`;
@@ -232,6 +240,7 @@ function offerTable(id, offers) {
   return `<div class="table-box"><table class="table"><thead><tr>
     <th>Oferta</th><th>À vista + frete</th><th>Parcelado + frete</th><th>Registro</th>
   </tr></thead><tbody>${offers.map(o => `<tr><td><div class="offer-name">${o.external ? esc(o.title) + "<br>" + link(o.url,"Ver no Google Shopping") : link(o.url,o.title)}</div>${shop(o.store)}
+    ${active(id,o) && o.target_match.kind === "provisional" ? badge("Meta estimada", "warn") : ""}
     ${o.old > o.price ? badge("De " + cur(o.old), "ok") : ""}${o.seller ? `<small>Vendedor: ${esc(o.seller)}</small>` : ""}
     ${o.note ? `<small>${esc(o.note)}</small>` : ""}
     </td><td>${payCell(o,"cash")}</td><td>${payCell(o,"card")}</td>
@@ -294,7 +303,7 @@ function alerts() {
       </div>${link(a.url,STORES[a.store])}</article>` :
       `<article class="card alert-row">${icon("↘","green")}
       <div class="info"><strong>${esc(a.name)} · ${cur(a.price)}</strong> ${a.read ? "" : badge("Novo","ok")} ${a.note ? badge("Provisório", "warn") : ""}
-      <p>${esc(a.title)} · ${a.mode === "cash" ? "À vista" : "Parcelado"} · ${stamp(a.time)}${a.note ? " · " + esc(a.note) : ""}</p></div>
+      <p>${esc(a.title)} · ${a.mode === "cash" ? "À vista" : "Parcelado"}${a.target_scope === "product" ? " · sem frete" : ""} · ${stamp(a.time)}${a.note ? " · " + esc(a.note) : ""}</p></div>
       ${link(a.url, a.external ? "Google Shopping" : STORES[a.store])}</article>`).join("")}</div>` :
       '<div class="card empty"><h3>Nenhum alerta ainda</h3><p>Defina um preço-alvo ou aguarde os cupons anunciados nos itens em vigia.</p></div>');
 }
@@ -380,7 +389,8 @@ function watchForm(id, sample) {
     ${field("Excluir palavras (opcional)","exclude",w.exclude,{wide:true,placeholder:"capa, película, usado",hint:"Separe por vírgula."})}
     ${field("Preço-alvo em R$","target",reais(w.target),{decimal:true,placeholder:"2.500,00"})}
     ${field("Forma de pagamento da meta","mode",w.mode,{options:{cash:"À vista",card:"Parcelado · pelo total"}})}
-    <div class="wide">${check("provisional","Avisar também se faltar confirmar frete ou cupom",w.provisional)}</div>
+    ${field("O limite considera","target_scope",w.target_scope || "delivery",{options:{delivery:"Preço + frete",product:"Só o preço do produto"}})}
+    <div class="wide">${check("provisional","Mostrar e avisar sobre ofertas dentro da meta estimada quando faltar confirmar frete ou cupom",w.provisional)}</div>
     ${hidden("stores","meli")}
   `, "watch", id ? "Salvar vigia" : "Começar a vigiar");
 }

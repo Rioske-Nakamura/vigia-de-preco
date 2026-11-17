@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vigia de Preço — Mercado Livre",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Consulta ofertas do Mercado Livre para o Vigia de Preço neste computador.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvx4W2zt55jWxQg0TcPUx/tSuvFvzkG8ikGtBcGB0cZ0Bk+hHltsh/TM70n3kk0JhzvoYAHb91VQsrraV+Tyu4VaGZ0CqRW6Bq8ZrxLgs0+C1b3ENXpXf/X7LmV1Ts/SShUGfAxCKawVG9J5YUXveVBoHTwORHx9K+3MEWmNgSA248vdZzESXnFVlphLPwVp/xN3AhRyjQ4TQre74iTmZc3uOe+AcDPYllK6+9S8Ux1I/eUvxDmdRA7DYkswtJLajWUeH9ql/XK2hHyxuPFvQoqCCPip2QB/gPlbIBrgquZqiHLHKc2NYmLHkpRpoP+Y2zfBDmMwSHMVbZztAreff7QIDAQAB",
   "minimum_chrome_version": "120",
