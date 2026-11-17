@@ -292,7 +292,7 @@ class App:
         watch = state["watches"][watch_id]
         for record in state["offers"].get(watch_id, {}).values():
             o = record["history"][-1]
-            if o["store"] in watch["stores"] and record["active"]:
+            if o["store"] in watch["stores"] and record["active"] and o["source"] != "import":
                 yield record, o
 
     def evaluate(self, watch_id):
@@ -372,6 +372,15 @@ class App:
             return [], dict(state="error", message="Formato inesperado da fonte (" + type(exc).__name__ + ").", time=now())
 
     def search(self, params, imported=False):
+        wid = string(params, "watch_id") if imported else ""
+        revision = None
+        if wid:
+            with self.lock:
+                saved = self.state["watches"].get(wid)
+                if not saved or "meli" not in saved["stores"]:
+                    raise ValueError("A vigia do Mercado Livre não está disponível.")
+                params = dict(params, query=saved["query"], exclude=saved["exclude"])
+                revision = saved["rev"]
         query = string(params, "query", 400)
         if not words(query):
             raise ValueError("Informe o produto que quer buscar.")
@@ -387,6 +396,8 @@ class App:
                 html = params.get("html")
                 if not isinstance(html, str) or not html or len(html) > 8_000_000:
                     raise ValueError("Escolha uma página HTML de até 8 MB.")
+                if meli_publico.is_vigia_page(html):
+                    raise ValueError("Você salvou o painel do Vigia. Abra a busca na aba do Mercado Livre, aguarde os preços aparecerem e salve aquela página como HTML.")
                 detail = not link.startswith("https://lista.mercadolivre.com.br/")
                 if detail:
                     # Bind a saved detail page to its advertised canonical listing.
@@ -400,14 +411,27 @@ class App:
                 except ProviderError as exc:
                     raise ValueError(str(exc)) from None
                 offers = self.providers.meli_offers(rows, watch, detail, imported=True)
+                if not offers:
+                    raise ValueError("Nenhum anúncio compatível no HTML. Salve a página de busca com os preços visíveis e confira o termo da vigia.")
                 status = dict(state="ok", time=now(), count=len(offers), imported=True)
+                if wid:
+                    with self.lock:
+                        current = self.state["watches"].get(wid)
+                        if not current or current["rev"] != revision:
+                            raise ValueError("A vigia mudou durante a leitura. Importe o arquivo novamente.")
+                        for record in self.state["offers"].get(wid, {}).values():
+                            if record["history"][-1]["source"] == "import":
+                                record["active"] = False
+                        for offer in offers:
+                            self.save_offer(wid, offer, "import")
+                        self.commit()
             else:
                 offers, status = self.query_store("meli", watch, settings)
             return {
                 "query": query,
                 "links": {"meli": url_for("meli", query)},
                 "scans": {"meli": status},
-                "offers": [{**o, **{m: calc(o, "", m, calculation) for m in ("cash", "card")}} for o in offers],
+                "offers": [{**o, **{m: calc(o, wid, m, calculation) for m in ("cash", "card")}} for o in offers],
             }
         finally:
             self.search_slots.release()

@@ -194,6 +194,11 @@ def embedded_cards(root, url):
     return None
 
 
+def is_vigia_page(html):
+    return bool(re.search(r"<title\b[^>]*>\s*Vigia de Preço\s*</title>", html, re.I)
+                and re.search(r"saved from url=\(\d+\)http://(?:127\.0\.0\.1|localhost):|\bMinhas vigias\b", html, re.I))
+
+
 def verification_page(html):
     # These indicators apply only after the offer parsers returned no usable data.
     return bool(re.search(r"_bmstate|_bm_skipml|__bm\b|g-recaptcha|h-captcha|"

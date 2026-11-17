@@ -71,13 +71,14 @@ async function refresh(force=false) {
 
 function watchStatus(id, offer) {
   if (offer.source === "manual") return "Registro manual";
+  if (offer.source === "import") return "Página salva · importada em";
   if (!state.sources[offer.store]) return "Fonte desativada";
   if (!offer.active) return "Fora da última busca";
   return state.scans[id]?.[offer.store]?.state === "error" ? "Última consulta falhou" : "Consulta automática";
 }
 
 function active(id, o) {
-  return o.active && state.watches[id].stores.includes(o.store) &&
+  return o.source !== "import" && o.active && state.watches[id].stores.includes(o.store) &&
     (o.source === "manual" || (state.sources[o.store] && state.scans[id]?.[o.store]?.state === "ok"));
 }
 
@@ -145,17 +146,21 @@ function searchPanel() {
     <div class="section-head"><div><h2 id="results-title">${esc(query)}</h2><p>${esc(resultsText)}</p></div>
       ${button("watch-search","+ Colocar em vigia","primary")}</div>
     <div class="source-line">${shop("meli")} ${link(links.meli, "Abrir no Mercado Livre")}</div>
-    ${status.state === "error" ? `<details class="meli-import"><summary>Importar página salva</summary>
-      <p class="hint">Abra a busca acima. Com os preços visíveis, pressione Ctrl+S e escolha “Página da Web, somente HTML”. Selecione o arquivo aqui para comparar os valores.</p>
-      <label class="field">Arquivo HTML do Mercado Livre <input type="file" id="meli-file" accept=".html,.htm,text/html"></label>
-      <p class="hint" id="meli-import-status" role="status"></p>
-    </details>` : ""}
+    ${status.state === "error" ? importControl() : ""}
     ${rows.length ? `<div class="table-box"><table class="table"><thead><tr><th>Oferta</th><th>À vista + frete</th><th>Parcelado + frete</th></tr></thead><tbody>
       ${rows.map(o => `<tr><td><div class="offer-name"><strong>${esc(o.title)}</strong></div>${shop(o.store)}
           ${o.old > o.price ? badge("De " + cur(o.old), "ok") : ""}<small>${esc(o.note)}</small>
           ${link(o.url, o.external ? "Ver no Google Shopping" : "Abrir anúncio")}</td><td>${payCell(o,"cash")}</td><td>${payCell(o,"card")}</td></tr>`).join("")}
       </tbody></table></div>` : ""}
   </section>`;
+}
+
+function importControl(id="") {
+  return `<details class="meli-import"><summary>Importar página salva</summary>
+    <p class="hint">Abra o link do Mercado Livre acima. Na aba da loja, com os preços visíveis, pressione Ctrl+S e escolha “Página da Web, somente HTML”. Volte ao Vigia e selecione o arquivo.</p>
+    <label class="field">Arquivo HTML do Mercado Livre <input type="file" class="meli-file" data-watch-id="${id}" accept=".html,.htm,text/html"></label>
+    <p class="hint meli-import-status" role="status"></p>
+  </details>`;
 }
 
 function watchList() {
@@ -170,7 +175,8 @@ function watchRow(id, w) {
   const current = offers.filter(o => active(id, o)).sort((a,b) => (
     (a[m].total ?? Infinity) - (b[m].total ?? Infinity) || (a[m].base ?? Infinity) - (b[m].base ?? Infinity)
   ));
-  const history = offers.filter(o => !active(id, o)).sort((a,b) => b.time-a.time);
+  const imported = offers.filter(o => o.source === "import" && o.active);
+  const history = offers.filter(o => !active(id, o) && !(o.source === "import" && o.active)).sort((a,b) => b.time-a.time);
   const first = current.find(o => o[m].total != null);
   const tags = `data-id="${id}"`;
   return `<details class="watch card" data-watch="${id}" ${expanded.has(id) ? "open" : ""}>
@@ -186,14 +192,16 @@ function watchRow(id, w) {
     ${button("toggle",w.active?"Pausar":"Retomar","secondary small",tags)}
     ${button("delete","Excluir","danger small",tags)}
   </div>
-  ${w.stores.map(s => {
+  ${w.stores.filter(s => s === "meli").map(s => {
     const log = state.scans[id]?.[s];
     const desc = !state.sources[s] ? "Consulta automática pausada nesta loja" : !log ? "Aguardando consulta" :
       log.state === "ok" ? `${log.count} resultado(s) · ${stamp(log.time)}` : log.message + " · " + stamp(log.time);
-    return `<div class="source-line">${shop(s)} ${link(w.links[s], "Buscar na loja")} <span>${esc(desc)}</span></div>`;
+    return `<div class="source-line">${shop(s)} ${link(w.links[s], "Abrir no Mercado Livre")} <span>${esc(desc)}</span></div>`;
   }).join("")}
+  ${w.stores.includes("meli") ? importControl(id) : ""}
   <h3>Comparação de ofertas</h3>
   ${current.length ? offerTable(id,current) : '<p class="hint">Sem ofertas atuais. Se o Mercado Livre recusar a consulta, abra a busca na loja.</p>'}
+  ${imported.length ? `<h3>Ofertas da página importada</h3><p class="hint">Preços da página salva. Confira se continuam válidos na loja.</p>${offerTable(id,imported)}` : ""}
   ${history.length ? `<details><summary>Resultados anteriores e indisponíveis (${history.length})</summary>${offerTable(id,history)}</details>` : ""}
   </div></details>`;
 }
@@ -518,20 +526,27 @@ document.addEventListener("input", e => {
   }
 });
 document.addEventListener("change", async e => {
-  if (e.target.id === "meli-file") {
+  if (e.target.matches(".meli-file")) {
     const file = e.target.files[0];
-    if (!file || !searchResult || searchPending) return;
-    const status = document.querySelector("#meli-import-status");
+    const watchId = e.target.dataset.watchId;
+    if (!file || (!watchId && !searchResult) || searchPending) return;
+    const status = e.target.closest(".meli-import").querySelector(".meli-import-status");
     if (file.size > 8_000_000) { status.textContent = "O arquivo deve ter até 8 MB."; return; }
-    const query = searchResult.query;
+    const query = watchId ? "" : searchResult.query;
     searchPending = true;
     e.target.disabled = true;
     status.textContent = "Lendo a página salva…";
     try {
-      const result = await api("import-meli", {query, html: await file.text()});
-      searchResult = result;
+      const result = await api("import-meli", {query, watch_id:watchId, html: await file.text()});
       searchPending = false;
-      if (page === "painel") render();
+      if (watchId) {
+        expanded.add(watchId);
+        await refresh(true);
+        notify(`${result.offers.length} oferta(s) importada(s).`);
+      } else {
+        searchResult = result;
+        if (page === "painel") render();
+      }
     } catch (error) {
       status.textContent = error.message;
       e.target.value = "";
