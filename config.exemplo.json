@@ -1,0 +1,16 @@
+{
+  "MELI_CLIENT_ID": "",
+  "MELI_CLIENT_SECRET": "",
+  "MELI_REFRESH_TOKEN": "",
+  "MELI_ACCESS_TOKEN": "",
+  "KEEPA_KEY": "",
+  "KABUM_AWIN_CSV": "",
+  "SERPAPI_KEY": "",
+  "AWIN_PUBLISHER_ID": "",
+  "AWIN_API_TOKEN": "",
+  "COUPON_FEEDS": {
+    "meli": "",
+    "amazon": "",
+    "kabum": ""
+  }
+}

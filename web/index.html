@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f7fc">
+  <title>Vigia de Preço</title>
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand" href="#painel"><span class="brandmark" aria-hidden="true"><i></i></span><span>Vigia<span class="brand-accent">.</span><small>de preço</small></span></a>
+    <nav aria-label="Navegação principal">
+      <button data-page="painel"><span class="navicon" aria-hidden="true">▦</span>Visão geral</button>
+      <button data-page="cupons"><span class="navicon" aria-hidden="true">◇</span>Cupons</button>
+      <button data-page="alertas"><span class="navicon" aria-hidden="true">♧</span>Alertas <span id="nav-alerts"></span></button>
+      <button data-page="ajustes"><span class="navicon" aria-hidden="true">⚙</span>Configurações</button>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="local"><span class="dot"></span><div><strong>Servidor local</strong><small id="local-status">Conectando…</small></div></div>
+      <a href="/guia" target="_blank" rel="noopener">Guia de instalação <span aria-hidden="true">›</span></a>
+    </div>
+  </aside>
+  <main>
+    <header class="topbar"><span id="breadcrumb">Painel / Visão geral</span><button data-action="scan" class="secondary" id="scan-all"><span aria-hidden="true">↻</span> Verificar agora</button></header>
+    <div id="content" aria-live="off"><p>Carregando painel…</p></div>
+  </main>
+</div>
+<div id="message" role="status" hidden></div>
+<dialog id="dialog" aria-labelledby="dialog-title">
+  <div id="dialog-content"></div>
+</dialog>
+</body>
+</html>
