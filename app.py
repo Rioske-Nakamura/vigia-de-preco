@@ -415,6 +415,7 @@ class App:
             messages = {"busy": "Há consultas em andamento. Tente novamente.",
                         "timeout": "O navegador não respondeu a tempo. Confira se a extensão e o navegador estão abertos.",
                         "empty": "O navegador abriu a página, mas o Mercado Livre não exibiu ofertas legíveis.",
+                        "unreadable": "O Mercado Livre carregou a página, mas o Vigia não conseguiu ler os anúncios exibidos.",
                         "error": "A extensão não conseguiu abrir a página do Mercado Livre."}
             stage = result.get("stage")
             message = messages[status]
@@ -424,11 +425,7 @@ class App:
                 message = "O Vigia abriu a janela do Mercado Livre, mas ela não exibiu preços legíveis."
             raise ProviderError(message, status=503 if status in ("timeout", "busy", "error") else None)
         detail = not url.startswith("https://lista.mercadolivre.com.br/")
-        if detail:
-            source_url = meli_publico.product_url(result.get("url"), url) if result.get("url") else ""
-            if not source_url or campanhas.product_key("meli", source_url) != campanhas.product_key("meli", url):
-                raise ProviderError("O Mercado Livre redirecionou para outro anúncio. Confira o link da vigia.")
-        rows = self.providers.parse_meli(result["html"], url, detail)
+        rows = result["rows"] if "rows" in result else self.browser_rows(url, result)
         offers = self.providers.meli_offers(rows, watch, detail)
         for offer in offers:
             note = "Oferta consultada pelo navegador no Mercado Livre."
@@ -436,6 +433,14 @@ class App:
                 note = "Oferta consultada na janela automática do Mercado Livre."
             offer["note"] = note
         return offers
+
+    def browser_rows(self, url, result):
+        detail = not url.startswith("https://lista.mercadolivre.com.br/")
+        if detail:
+            source_url = meli_publico.product_url(result.get("url"), url) if result.get("url") else ""
+            if not source_url or campanhas.product_key("meli", source_url) != campanhas.product_key("meli", url):
+                raise ProviderError("O Mercado Livre redirecionou para outro anúncio. Confira o link da vigia.")
+        return self.providers.parse_meli(result["html"], url, detail)
 
     def browser_action(self, path, body):
         if path == "/api/browser-next":
@@ -449,7 +454,7 @@ class App:
                             watch.pop("retry_at", None)
             return {"job": self.browser.next_job(wait=body.get("wait") is True, version=string(body, "version", 24))}
         status = body.get("status")
-        if status not in ("ok", "empty", "error", "verification"):
+        if status not in ("ok", "empty", "unreadable", "error", "verification"):
             raise ValueError("Resultado da extensão inválido.")
         stage = body.get("stage")
         if stage not in ("url", "opening", "background", "foreground", "focus", "redirect"):
@@ -460,7 +465,23 @@ class App:
             if not isinstance(html, str) or not html or len(html) > 1_500_000:
                 raise ValueError("Conteúdo da extensão inválido.")
             result.update(html=html, url=string(body, "url", 2500))
-        return {"accepted": self.browser.complete(string(body, "id"), result)}
+        job_id = string(body, "id")
+        if status == "ok" and body.get("candidate") is True:
+            url = self.browser.claimed_url(job_id)
+            if url is None:
+                return {"accepted": False, "continue": False}
+            try:
+                rows = self.browser_rows(url, result)
+            except ProviderError as exc:
+                if exc.status == 403:
+                    self.browser.complete(job_id, {"status": "verification", "stage": stage})
+                    return {"accepted": True, "status": "verification"}
+                return {"accepted": False, "continue": True}
+            if not rows and body.get("settled_empty") is not True:
+                return {"accepted": False, "continue": True}
+            accepted = self.browser.complete(job_id, {"status": status, "stage": stage, "rows": rows})
+            return {"accepted": accepted, "continue": False}
+        return {"accepted": self.browser.complete(job_id, result)}
 
     def search(self, params, imported=False):
         wid = string(params, "watch_id") if imported else ""

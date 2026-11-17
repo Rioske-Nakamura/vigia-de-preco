@@ -97,7 +97,7 @@ function browserLastResult() {
   const result = state.browser_diagnostics?.last_result;
   if (!result) return "Nenhuma consulta recebida da extensão ainda.";
   const status = {ok:"Página recebida", empty:"Página sem preços legíveis", error:"Falha ao abrir a página",
-    verification:"Verificação do Mercado Livre", timeout:"Consulta sem resposta"}[result.status];
+    unreadable:"Anúncios ainda sem leitura", verification:"Verificação do Mercado Livre", timeout:"Consulta sem resposta"}[result.status];
   const stage = {background:"aba em segundo plano", foreground:"janela em primeiro plano", url:"endereço",
     opening:"abertura da aba", focus:"ativação da janela", redirect:"redirecionamento",
     response:"aguardando resposta", waiting:"aguardando a extensão"}[result.stage];

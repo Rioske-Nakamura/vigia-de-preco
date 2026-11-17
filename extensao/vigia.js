@@ -41,6 +41,7 @@ function capture() {
     return copy.outerHTML;
   }
   const snippets = nodes.slice(0, 80).map(clean);
+  const explicitEmpty = Boolean(document.querySelector(".ui-search-no-results"));
   const priceSelector = ".ui-pdp-price__second-line, .poly-price__current, .ui-search-price__second-line";
   const priced = nodes.some(node => {
     if (node.matches(".ui-search-no-results")) return true;
@@ -96,12 +97,14 @@ function capture() {
     /verifique se você é humano|confirme que você é humano|verificação de segurança|verifique sua identidade|access denied|hubo un error accediendo/i.test(text);
   if (blocked) return {status:"verification"};
   if (priced || snippets.length > nodes.slice(0, 80).length) {
-    return {status:"ok", html:snippets.join("").slice(0, 1_500_000), url:location.href};
+    return {status:"ok", html:snippets.join("").slice(0, 1_500_000), url:location.href,
+      noResults:explicitEmpty, complete:document.readyState === "complete", visible:document.visibilityState === "visible"};
   }
   return {status:"empty"};
 }
 
-async function navigate(url) {
+async function navigate(job) {
+  const {url, id} = job;
   if (!allowed(url)) return {status:"error", stage:"url"};
   let tab;
   let workWindow;
@@ -112,28 +115,48 @@ async function navigate(url) {
     tab = await chrome.tabs.create({url, active:false});
     await chrome.tabs.update(tab.id, {autoDiscardable:false}).catch(() => {});
     stage = "background";
-    for (let attempt = 0; attempt < 34; attempt++) {
+    let emptyFrames = 0;
+    let rejected = false;
+    let lastCandidate;
+    for (let attempt = 0; attempt < 52; attempt++) {
       const current = await chrome.tabs.get(tab.id);
       if (current.url && current.url !== "about:blank") {
-        if (!allowed(current.url)) {
-          const host = new URL(current.url).hostname;
-          return {status:host === "auth.mercadolivre.com.br" ? "verification" : "error", stage:"redirect"};
-        }
-        // The DOM can be ready while other page resources are still loading.
-        const result = await chrome.scripting.executeScript({target:{tabId:tab.id}, func:capture}).catch(() => []);
+        const host = new URL(current.url).hostname;
+        if (host === "auth.mercadolivre.com.br") return {status:"verification", stage:"redirect"};
+        // During a redirect the reported address can change before the DOM is ready.
+        const result = allowed(current.url)
+          ? await chrome.scripting.executeScript({target:{tabId:tab.id}, func:capture}).catch(() => [])
+          : [];
         const data = result[0]?.result;
-        if (data && data.status !== "empty") return {...data, stage};
+        if (data?.status === "verification") return {...data, stage};
+        if (data?.status === "ok") {
+          emptyFrames = data.noResults && data.complete && data.visible ? emptyFrames + 1 : 0;
+          const settled = emptyFrames >= 4;
+          const changed = lastCandidate?.html !== data.html || lastCandidate?.url !== data.url || lastCandidate?.settled !== settled;
+          if ((!data.noResults || settled) && changed) {
+            lastCandidate = {html:data.html, url:data.url, settled};
+            const result = await request("result", {id, status:"ok", html:data.html, url:data.url,
+              stage, candidate:true, settled_empty:settled});
+            if (result.accepted || result.continue === false) {
+              return {status:result.status || "ok", delivered:true};
+            }
+            rejected = true;
+          }
+        } else {
+          emptyFrames = 0;
+        }
       }
       if (attempt === 6) {
         workWindow = await chrome.windows.create({tabId:tab.id, focused:true, type:"normal"});
         if (workWindow?.id == null) return {status:"error", stage:"focus"};
         stage = "foreground";
         // Some window managers ignore focus during creation.
+        await chrome.tabs.update(tab.id, {active:true});
         if (!workWindow.focused) await chrome.windows.update(workWindow.id, {focused:true});
       }
       await delay(650);
     }
-    return {status:"empty", stage};
+    return {status:rejected ? "unreadable" : "empty", stage};
   } catch {
     return {status:"error", stage};
   } finally {
@@ -152,8 +175,8 @@ async function tick() {
     for (let i = 0; i < 4; i++) {
       const {job} = await request("next", {wait:i === 0, version:chrome.runtime.getManifest().version}, 18000);
       if (!job) break;
-      const result = await navigate(job.url);
-      await request("result", {id:job.id, ...result});
+      const result = await navigate(job);
+      if (!result.delivered) await request("result", {id:job.id, ...result});
       if (result.status === "verification") break;
     }
   } catch {

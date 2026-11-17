@@ -40,6 +40,13 @@ class BrowserBridge:
                     return None
                 self.condition.wait(remaining)
 
+    def claimed_url(self, key):
+        with self.condition:
+            job = self.jobs.get(key)
+            if job and job["claimed"] and job["answer"] is None:
+                return job["url"]
+            return None
+
     def complete(self, key, result):
         with self.condition:
             job = self.jobs.get(key)
@@ -62,7 +69,7 @@ class BrowserBridge:
             job = self.jobs[key] = {"url": url, "claimed": False, "answer": None}
             self.condition.notify_all()
             try:
-                self.condition.wait_for(lambda: job["answer"] is not None, timeout=60)
+                self.condition.wait_for(lambda: job["answer"] is not None, timeout=100)
                 if job["answer"] is not None:
                     return job["answer"]
                 stage = "response" if job["claimed"] else "waiting"
