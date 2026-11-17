@@ -11,14 +11,21 @@ class BrowserBridge:
         self.jobs = {}
         self.last_poll = None
         self.pause_until = 0
+        self.version = ""
+        self.last_result = None
 
     def connected(self):
         with self.condition:
             return self.last_poll is not None and time.monotonic() - self.last_poll < 90
 
-    def next_job(self, wait=False):
+    def diagnostics(self):
+        with self.condition:
+            return {"version": self.version, "last_result": self.last_result}
+
+    def next_job(self, wait=False, version=""):
         with self.condition:
             self.last_poll = time.monotonic()
+            self.version = version
             deadline = self.last_poll + (12 if wait else 0)
             while True:
                 if self.pause_until > time.monotonic():
@@ -39,6 +46,7 @@ class BrowserBridge:
             if not job or not job["claimed"] or job["answer"] is not None:
                 return False
             job["answer"] = result
+            self.last_result = {"status": result["status"], "stage": result.get("stage", ""), "time": time.time()}
             if result["status"] == "verification":
                 self.pause_until = time.monotonic() + 900
             self.condition.notify_all()
@@ -55,7 +63,11 @@ class BrowserBridge:
             self.condition.notify_all()
             try:
                 self.condition.wait_for(lambda: job["answer"] is not None, timeout=60)
-                return job["answer"] or {"status": "timeout"}
+                if job["answer"] is not None:
+                    return job["answer"]
+                stage = "response" if job["claimed"] else "waiting"
+                self.last_result = {"status": "timeout", "stage": stage, "time": time.time()}
+                return {"status": "timeout", "stage": stage}
             finally:
                 self.jobs.pop(key, None)
                 self.condition.notify_all()

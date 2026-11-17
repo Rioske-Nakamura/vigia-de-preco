@@ -86,10 +86,30 @@ function active(id, o) {
     (o.source === "manual" || (state.sources[o.store] && state.scans[id]?.[o.store]?.state === "ok"));
 }
 
+function browserStatus() {
+  if (!state.browser_connected) return badge("Extensão desconectada", "warn");
+  const version = state.browser_diagnostics?.version;
+  if (!version) return badge("Extensão antiga · recarregue", "warn");
+  return badge("Navegador conectado · " + version, "ok");
+}
+
+function browserLastResult() {
+  const result = state.browser_diagnostics?.last_result;
+  if (!result) return "Nenhuma consulta recebida da extensão ainda.";
+  const status = {ok:"Página recebida", empty:"Página sem preços legíveis", error:"Falha ao abrir a página",
+    verification:"Verificação do Mercado Livre", timeout:"Consulta sem resposta"}[result.status];
+  const stage = {background:"aba em segundo plano", foreground:"janela em primeiro plano", url:"endereço",
+    opening:"abertura da aba", focus:"ativação da janela", redirect:"redirecionamento",
+    response:"aguardando resposta", waiting:"aguardando a extensão"}[result.stage];
+  return [stamp(result.time), status, stage].filter(Boolean).join(" · ");
+}
+
 function updateHeader() {
   const count = state.alerts.filter(a => !a.read).length;
   const status = document.querySelector("#browser-connection");
-  if (status) status.innerHTML = badge(state.browser_connected ? "Navegador conectado" : "Extensão desconectada", state.browser_connected ? "ok" : "warn");
+  if (status) status.innerHTML = browserStatus();
+  const last = document.querySelector("#browser-last-result");
+  if (last) last.textContent = browserLastResult();
   document.querySelector("#nav-alerts").innerHTML = count ? badge(count, "ok") : "";
   document.querySelector("#local-status").textContent = state.running ? "Consultando lojas…" : "Em execução neste computador";
   document.querySelector(".local .dot").classList.remove("off");
@@ -320,7 +340,8 @@ function settings() {
     </div><p class="form-error" role="alert"></p><div class="form-footer"><button class="primary">Salvar ajustes</button></div></form>
   </div>
   <div class="form-section"><h2>Mercado Livre</h2>
-    <span id="browser-connection">${badge(state.browser_connected ? "Navegador conectado" : "Extensão desconectada", state.browser_connected ? "ok" : "warn")}</span>
+    <span id="browser-connection">${browserStatus()}</span>
+    <p class="hint" id="browser-last-result">${esc(browserLastResult())}</p>
     <p class="hint"><a href="/guia#extensao">Instalar a extensão para Chrome ou Edge ›</a></p>
     <p class="hint">Última rodada: ${stamp(state.last_run)}. Mantenha o computador ligado e o servidor em execução.</p>
   </div>`;

@@ -389,6 +389,7 @@ class App:
             state.pop("coupon_seen", None)
             state["running"] = self.running
             state["browser_connected"] = self.browser.connected()
+            state["browser_diagnostics"] = self.browser.diagnostics()
             return state
 
     def query_store(self, store, watch, settings):
@@ -415,7 +416,13 @@ class App:
                         "timeout": "O navegador não respondeu a tempo. Confira se a extensão e o navegador estão abertos.",
                         "empty": "O navegador abriu a página, mas o Mercado Livre não exibiu ofertas legíveis.",
                         "error": "A extensão não conseguiu abrir a página do Mercado Livre."}
-            raise ProviderError(messages[status], status=503 if status in ("timeout", "busy", "error") else None)
+            stage = result.get("stage")
+            message = messages[status]
+            if status == "timeout" and stage == "waiting":
+                message = "A extensão não recebeu a consulta enquanto o painel estava disponível. Confira a versão em Configurações."
+            elif status == "empty" and stage == "foreground":
+                message = "O Vigia abriu a janela do Mercado Livre, mas ela não exibiu preços legíveis."
+            raise ProviderError(message, status=503 if status in ("timeout", "busy", "error") else None)
         detail = not url.startswith("https://lista.mercadolivre.com.br/")
         if detail:
             source_url = meli_publico.product_url(result.get("url"), url) if result.get("url") else ""
@@ -424,7 +431,10 @@ class App:
         rows = self.providers.parse_meli(result["html"], url, detail)
         offers = self.providers.meli_offers(rows, watch, detail)
         for offer in offers:
-            offer["note"] = "Oferta consultada pelo navegador no Mercado Livre."
+            note = "Oferta consultada pelo navegador no Mercado Livre."
+            if result.get("stage") == "foreground":
+                note = "Oferta consultada na janela automática do Mercado Livre."
+            offer["note"] = note
         return offers
 
     def browser_action(self, path, body):
@@ -437,11 +447,14 @@ class App:
                         if watch and checks.get("meli", {}).get("state") == "error":
                             watch["last_attempt"] = 0
                             watch.pop("retry_at", None)
-            return {"job": self.browser.next_job(wait=body.get("wait") is True)}
+            return {"job": self.browser.next_job(wait=body.get("wait") is True, version=string(body, "version", 24))}
         status = body.get("status")
         if status not in ("ok", "empty", "error", "verification"):
             raise ValueError("Resultado da extensão inválido.")
-        result = {"status": status}
+        stage = body.get("stage")
+        if stage not in ("url", "opening", "background", "foreground", "focus", "redirect"):
+            stage = ""
+        result = {"status": status, "stage": stage}
         if status == "ok":
             html = body.get("html")
             if not isinstance(html, str) or not html or len(html) > 1_500_000:

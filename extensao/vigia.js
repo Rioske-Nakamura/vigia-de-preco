@@ -55,7 +55,7 @@ function capture() {
     if (objectStart >= 0 && objectEnd > objectStart) {
       try {
         const items = JSON.parse(embedded.slice(objectStart, objectEnd + 1)).appProps.pageProps.initialState.results;
-        if (Array.isArray(items)) {
+        if (Array.isArray(items) && items.some(item => item?.polycard?.components?.some(c => c?.price?.current_price?.value > 0))) {
           const results = items.slice(0, 80).filter(r => r.polycard).map(({polycard:p}) => ({
             polycard:{
               metadata:{url:p.metadata?.url, url_fragments:p.metadata?.url_fragments},
@@ -102,34 +102,46 @@ function capture() {
 }
 
 async function navigate(url) {
-  if (!allowed(url)) return {status:"error"};
-  const tab = await chrome.tabs.create({url, active:false});
-  let windowId;
+  if (!allowed(url)) return {status:"error", stage:"url"};
+  let tab;
+  let workWindow;
+  let previousWindow;
+  let stage = "opening";
   try {
+    previousWindow = await chrome.windows.getLastFocused().catch(() => null);
+    tab = await chrome.tabs.create({url, active:false});
     await chrome.tabs.update(tab.id, {autoDiscardable:false}).catch(() => {});
-
-    for (let attempt = 0; attempt < 25; attempt++) {
+    stage = "background";
+    for (let attempt = 0; attempt < 34; attempt++) {
       const current = await chrome.tabs.get(tab.id);
-      if (current.status === "complete" && current.url) {
+      if (current.url && current.url !== "about:blank") {
         if (!allowed(current.url)) {
           const host = new URL(current.url).hostname;
-          return {status:host === "auth.mercadolivre.com.br" ? "verification" : "error"};
+          return {status:host === "auth.mercadolivre.com.br" ? "verification" : "error", stage:"redirect"};
         }
-        const result = await chrome.scripting.executeScript({target:{tabId:tab.id}, func:capture});
+        // The DOM can be ready while other page resources are still loading.
+        const result = await chrome.scripting.executeScript({target:{tabId:tab.id}, func:capture}).catch(() => []);
         const data = result[0]?.result;
-        if (data && data.status !== "empty") return data;
+        if (data && data.status !== "empty") return {...data, stage};
       }
-      if (attempt === 9) {
-        // Give the existing page its own active tab without taking keyboard focus.
-        const window = await chrome.windows.create({tabId:tab.id, focused:false, type:"normal"});
-        windowId = window?.id;
+      if (attempt === 6) {
+        workWindow = await chrome.windows.create({tabId:tab.id, focused:true, type:"normal"});
+        if (workWindow?.id == null) return {status:"error", stage:"focus"};
+        stage = "foreground";
+        // Some window managers ignore focus during creation.
+        if (!workWindow.focused) await chrome.windows.update(workWindow.id, {focused:true});
       }
       await delay(650);
     }
-    return {status:"empty"};
+    return {status:"empty", stage};
+  } catch {
+    return {status:"error", stage};
   } finally {
-    try { await chrome.tabs.remove(tab.id); }
-    catch { if (windowId != null) await chrome.windows.remove(windowId).catch(() => {}); }
+    const currentWindow = workWindow && await chrome.windows.get(workWindow.id).catch(() => null);
+    if (tab) await chrome.tabs.remove(tab.id).catch(() => {});
+    if (currentWindow?.focused && previousWindow?.id != null && previousWindow.id !== workWindow.id) {
+      await chrome.windows.update(previousWindow.id, {focused:true}).catch(() => {});
+    }
   }
 }
 
@@ -138,11 +150,9 @@ async function tick() {
   running = true;
   try {
     for (let i = 0; i < 4; i++) {
-      const {job} = await request("next", {wait:i === 0}, 18000);
+      const {job} = await request("next", {wait:i === 0, version:chrome.runtime.getManifest().version}, 18000);
       if (!job) break;
-      let result;
-      try { result = await navigate(job.url); }
-      catch { result = {status:"error"}; }
+      const result = await navigate(job.url);
       await request("result", {id:job.id, ...result});
       if (result.status === "verification") break;
     }

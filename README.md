@@ -18,7 +18,7 @@ O painel consulta o Mercado Livre sem chave de API. Se o navegador estiver conec
 3. Ative o **Modo do desenvolvedor**, clique em **Carregar sem compactação** e selecione a pasta `extensao` deste projeto. Faça isso uma vez.
 4. Em **Configurações** do Vigia, confira se aparece **Navegador conectado**. Use **Buscar preços** ou deixe as vigias rodarem no intervalo configurado.
 
-A extensão abre uma aba em segundo plano, lê os dados dos anúncios do Mercado Livre e fecha a aba. Se os preços demorarem a renderizar, ela move a consulta para uma janela temporária, aberta sem pedir foco. Depois de atualizar o projeto, recarregue a extensão para aplicar as mudanças. Os resultados voltam ao servidor deste computador. Mantenha o servidor e o navegador abertos, com a extensão ativada. A extensão usa o endereço e a porta padrão. Quando o Mercado Livre apresentar uma verificação de acesso, a extensão encerra a tentativa e pausa as consultas por 15 minutos.
+A extensão abre uma aba em segundo plano, lê os dados dos anúncios do Mercado Livre e fecha a aba. Se os preços demorarem a renderizar, ela traz uma janela temporária para primeiro plano por alguns segundos e a fecha ao terminar. Depois de atualizar o projeto, recarregue a extensão para aplicar as mudanças. Os resultados voltam ao servidor deste computador. Mantenha o servidor e o navegador abertos, com a extensão ativada. A extensão usa o endereço e a porta padrão. Quando o Mercado Livre apresentar uma verificação de acesso, a extensão encerra a tentativa e pausa as consultas por 15 minutos.
 
 ## Preços, parcelas e frete
 
