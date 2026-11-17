@@ -66,7 +66,7 @@ async function refresh(force=false) {
   lastSnapshot = serialized;
   state = next;
   updateHeader();
-  if ((changed || force) && (force || (page !== "ajustes" && !dialog.open))) render();
+  if ((changed || force) && (force || (page !== "ajustes" && !dialog.open && !searchPending))) render();
 }
 
 function watchStatus(id, offer) {
@@ -140,11 +140,16 @@ function searchPanel() {
   ));
   const status = scans.meli;
   const resultsText = status.state === "error" ? status.message : rows.length
-    ? `${rows.length} oferta(s) na página do Mercado Livre.` : "Nenhuma oferta compatível nesta página.";
+    ? `${rows.length} oferta(s) na página ${status.imported ? "salva do" : "do"} Mercado Livre.` : "Nenhuma oferta compatível nesta página.";
   return `<section id="search-results" class="card search-results" aria-labelledby="results-title">
     <div class="section-head"><div><h2 id="results-title">${esc(query)}</h2><p>${esc(resultsText)}</p></div>
       ${button("watch-search","+ Colocar em vigia","primary")}</div>
     <div class="source-line">${shop("meli")} ${link(links.meli, "Abrir no Mercado Livre")}</div>
+    ${status.state === "error" ? `<details class="meli-import"><summary>Importar página salva</summary>
+      <p class="hint">Abra a busca acima. Com os preços visíveis, pressione Ctrl+S e escolha “Página da Web, somente HTML”. Selecione o arquivo aqui para comparar os valores.</p>
+      <label class="field">Arquivo HTML do Mercado Livre <input type="file" id="meli-file" accept=".html,.htm,text/html"></label>
+      <p class="hint" id="meli-import-status" role="status"></p>
+    </details>` : ""}
     ${rows.length ? `<div class="table-box"><table class="table"><thead><tr><th>Oferta</th><th>À vista + frete</th><th>Parcelado + frete</th></tr></thead><tbody>
       ${rows.map(o => `<tr><td><div class="offer-name"><strong>${esc(o.title)}</strong></div>${shop(o.store)}
           ${o.old > o.price ? badge("De " + cur(o.old), "ok") : ""}<small>${esc(o.note)}</small>
@@ -512,7 +517,27 @@ document.addEventListener("input", e => {
     document.querySelector("#watch-list").innerHTML = watchList();
   }
 });
-document.addEventListener("change", e => {
+document.addEventListener("change", async e => {
+  if (e.target.id === "meli-file") {
+    const file = e.target.files[0];
+    if (!file || !searchResult || searchPending) return;
+    const status = document.querySelector("#meli-import-status");
+    if (file.size > 8_000_000) { status.textContent = "O arquivo deve ter até 8 MB."; return; }
+    const query = searchResult.query;
+    searchPending = true;
+    e.target.disabled = true;
+    status.textContent = "Lendo a página salva…";
+    try {
+      const result = await api("import-meli", {query, html: await file.text()});
+      searchResult = result;
+      searchPending = false;
+      if (page === "painel") render();
+    } catch (error) {
+      status.textContent = error.message;
+      e.target.value = "";
+    } finally { searchPending = false; e.target.disabled = false; }
+    return;
+  }
   if (!["category-filter","payment-filter"].includes(e.target.id)) return;
   if (e.target.id === "category-filter") category = e.target.value;
   else payment = e.target.value;

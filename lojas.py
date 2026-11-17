@@ -28,7 +28,7 @@ def url_for(store, query):
         product = meli_publico.product_url(query, "https://www.mercadolivre.com.br") if query.startswith("https://") else ""
         if product:
             return product
-    q = urllib.parse.quote("-".join(query.split()) if store == "meli" else query, safe="")
+    q = urllib.parse.quote("-".join(query.lower().split()) if store == "meli" else query, safe="")
     return {
         "meli": f"https://lista.mercadolivre.com.br/{q}",
         "amazon": f"https://www.amazon.com.br/s?k={q}",
@@ -153,12 +153,26 @@ class Providers:
                     self.public_retry_at = now + 900
                     raise ProviderError("O Mercado Livre recusou a consulta direta. Abra a busca na loja ou tente mais tarde.") from None
                 raise
-            rows = meli_publico.parse(html.decode("utf-8", errors="replace"), url, detail)
-            if rows is None:
-                raise ProviderError("A página pública não retornou preços reconhecíveis. Abra a busca na loja para conferir.")
+            try:
+                rows = self.parse_meli(html.decode("utf-8", errors="replace"), url, detail)
+            except ProviderError as exc:
+                if exc.status == 403:
+                    self.public_retry_at = now + 900
+                raise
             if len(self.public_cache) >= 60:
                 self.public_cache.pop(next(iter(self.public_cache)))
             self.public_cache[url] = (now + 180, rows)
+        return self.meli_offers(rows, watch, detail)
+
+    def parse_meli(self, html, url, detail):
+        rows = meli_publico.parse(html, url, detail)
+        if rows is None:
+            if meli_publico.verification_page(html):
+                raise ProviderError("O Mercado Livre mostrou uma tela de verificação. Abra a busca no navegador.", status=403)
+            raise ProviderError("A página veio sem ofertas legíveis. Abra a busca no navegador e importe a página de resultados.")
+        return rows
+
+    def meli_offers(self, rows, watch, detail, imported=False):
         offers = {}
         for row in rows:
             if not detail and not matches(row["title"], watch):
@@ -174,7 +188,8 @@ class Providers:
                     if advertised:
                         fields["shipping_estimate"] = meli_publico.price(advertised[1])
             offers.setdefault(row["url"], make_offer("meli", row["url"], row["title"], row["url"], row["price"],
-                provider="meli_public", note="Preço exibido na página pública do Mercado Livre.", **fields))
+                provider="meli_public", note=("Página salva no navegador. Confira se o preço continua válido." if imported else
+                    "Preço exibido na página pública do Mercado Livre."), **fields))
         return list(offers.values())[:20]
 
     def scan_native(self, store, watch, settings):

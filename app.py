@@ -14,6 +14,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import campanhas
+import meli_publico
 from lojas import STORES, ProviderError, Providers, cents, make_offer, store_link, url_for, words
 
 ROOT = Path(__file__).resolve().parent
@@ -370,7 +371,7 @@ class App:
         except Exception as exc:
             return [], dict(state="error", message="Formato inesperado da fonte (" + type(exc).__name__ + ").", time=now())
 
-    def search(self, params):
+    def search(self, params, imported=False):
         query = string(params, "query", 400)
         if not words(query):
             raise ValueError("Informe o produto que quer buscar.")
@@ -381,7 +382,27 @@ class App:
             with self.lock:
                 settings = self.state["settings"].copy()
                 calculation = dict(settings=settings, coupons=copy.deepcopy(self.state["coupons"]))
-            offers, status = self.query_store("meli", watch, settings)
+            link = url_for("meli", query)
+            if imported:
+                html = params.get("html")
+                if not isinstance(html, str) or not html or len(html) > 8_000_000:
+                    raise ValueError("Escolha uma página HTML de até 8 MB.")
+                detail = not link.startswith("https://lista.mercadolivre.com.br/")
+                if detail:
+                    # Bind a saved detail page to its advertised canonical listing.
+                    canonical = next((n.attrs.get("href") for n in meli_publico.Page(html).root.walk()
+                        if n.tag == "link" and n.attrs.get("rel") == "canonical"), None)
+                    page_link = meli_publico.product_url(canonical, link) if canonical else ""
+                    if not page_link or campanhas.product_key("meli", page_link) != campanhas.product_key("meli", link):
+                        raise ValueError("O arquivo não identifica o mesmo anúncio da busca. Salve a página do anúncio correto.")
+                try:
+                    rows = self.providers.parse_meli(html, link, detail)
+                except ProviderError as exc:
+                    raise ValueError(str(exc)) from None
+                offers = self.providers.meli_offers(rows, watch, detail, imported=True)
+                status = dict(state="ok", time=now(), count=len(offers), imported=True)
+            else:
+                offers, status = self.query_store("meli", watch, settings)
             return {
                 "query": query,
                 "links": {"meli": url_for("meli", query)},
@@ -457,8 +478,8 @@ class App:
     def change(self, action, b):
         if action == "scan-coupons":
             return {"started": self.trigger_coupons()}
-        if action == "search":
-            return self.search(b)
+        if action in ("search", "import-meli"):
+            return self.search(b, imported=action == "import-meli")
         if action == "scan":
             return {"started": self.trigger(b.get("id"))}
         with self.lock:
@@ -572,7 +593,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get_content_type() != "application/json":
             return self.reply(415, {"error": "Use JSON."})
         try:
-            length = number(self.headers.get("Content-Length"), 1, 48_000)
+            limit = 12_000_000 if self.path == "/api/import-meli" else 48_000
+            length = number(self.headers.get("Content-Length"), 1, limit)
             b = json.loads(self.rfile.read(length))
             if not isinstance(b, dict) or not self.path.startswith("/api/"):
                 raise ValueError("Pedido inválido.")

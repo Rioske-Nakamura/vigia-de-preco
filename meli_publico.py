@@ -110,15 +110,18 @@ def product_url(href, base):
     return ""
 
 def row(node, page_url, detail=False):
-    title = node.find("ui-pdp-title") if detail else node.find("poly-component__title")
+    title = node.find("ui-pdp-title") if detail else node.find("poly-component__title", "ui-search-item__title", "ui-search-link")
     if not title:
         return None
-    link = product_url(page_url if detail else title.attrs.get("href"), page_url)
-    current = node.find("ui-pdp-price__second-line") if detail else node.find("poly-price__current")
+    anchor = title if title.tag == "a" else next((n for n in title.walk() if n.tag == "a"), None)
+    if not anchor and not detail:
+        anchor = next((n for n in node.walk() if n.tag == "a" and product_url(n.attrs.get("href"), page_url)), None)
+    link = product_url(page_url if detail else (anchor.attrs.get("href") if anchor else ""), page_url)
+    current = node.find("ui-pdp-price__second-line") if detail else node.find("poly-price__current", "ui-search-price__second-line")
     value = amount(current)
     if not value or not link:
         return None
-    previous = amount(node.find("ui-pdp-price__original-value", "poly-price__original"))
+    previous = amount(node.find("ui-pdp-price__original-value", "poly-price__original", "ui-search-price__original-value"))
     plan = node.find("ui-pdp-price__subtitles", "poly-price__installments")
     terms = current.text().casefold()
     shipping = node.find("poly-component__shipping", "ui-pdp-shipping")
@@ -143,6 +146,60 @@ def row(node, page_url, detail=False):
             result.update(installments=int(total[2]), card_total=price(total[1]))
         result["plan_text"] = plan_text[:160]
     return result
+
+def embedded_cards(root, url):
+    """Use the store's published search data when the HTML has no rendered cards."""
+    for node in root.walk():
+        if node.tag != "script" or node.attrs.get("id") != "__NORDIC_RENDERING_CTX__":
+            continue
+        raw = "".join(node.parts()).strip()
+        assignment = re.search(r"_n\.ctx\.r\s*=\s*", raw)
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(raw[assignment.end():] if assignment else raw)
+            items = payload["appProps"]["pageProps"]["initialState"]["results"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if not isinstance(items, list):
+            continue
+        results = []
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("polycard"), dict):
+                continue
+            card = item["polycard"]
+            components = card.get("components")
+            if not isinstance(components, list):
+                continue
+            parts = {c.get("type"): c[c["type"]] for c in components
+                     if isinstance(c, dict) and isinstance(c.get("type"), str) and isinstance(c.get(c["type"]), dict)}
+            title = parts.get("title", {}).get("text")
+            prices = parts.get("price") or {}
+            current = prices.get("current_price") or {}
+            if not isinstance(current, dict) or current.get("currency", "BRL") not in ("BRL", "$"):
+                continue
+            value = price(current.get("value"))
+            metadata = card.get("metadata") or {}
+            href = metadata.get("url") if isinstance(metadata, dict) else None
+            if not isinstance(href, str) or not isinstance(title, str) or not value:
+                continue
+            if not href.startswith(("https://", "//", "/")):
+                href = "https://" + href
+            fragment = metadata.get("url_fragments")
+            link = product_url(href + (fragment if isinstance(fragment, str) else ""), url)
+            if not link:
+                continue
+            old = prices.get("previous_price") or prices.get("original_price") or {}
+            results.append(dict(title=title, url=link, price=value,
+                                old=price(old.get("value")) if isinstance(old, dict) else None))
+        return results or (None if items else [])
+    return None
+
+
+def verification_page(html):
+    # These indicators apply only after the offer parsers returned no usable data.
+    return bool(re.search(r"_bmstate|_bm_skipml|__bm\b|g-recaptcha|h-captcha|"
+                          r"verifique se voc[eê] [eé] humano|confirme que voc[eê] [eé] humano|"
+                          r"<form[^>]+action=[\"']https://auth\.mercadolivre\.com\.br", html, re.I))
+
 
 def parse(html, url, detail):
     page = Page(html)
@@ -172,6 +229,11 @@ def parse(html, url, detail):
         return None
     cards = [node for node in page.root.walk() if "poly-card" in node.classes]
     if not cards:
-        return [] if page.root.find("ui-search-no-results", "ui-search-rescue") else None
+        cards = [node for node in page.root.walk() if "ui-search-layout__item" in node.classes]
     results = [result for node in cards if (result := row(node, url))]
-    return results or None
+    if results:
+        return results
+    embedded = embedded_cards(page.root, url)
+    if embedded is not None:
+        return embedded
+    return [] if page.root.find("ui-search-no-results", "ui-search-rescue") else None

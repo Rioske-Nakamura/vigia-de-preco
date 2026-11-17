@@ -13,3 +13,5 @@ main{width:min(100%,1400px);margin:0 auto;padding:0 clamp(20px,3.45vw,56px) 52px
 .key-form{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:12px}.key-form .field{flex:1;min-width:150px;max-width:420px}.key-form .form-footer{margin-top:0}.key-form .form-error{flex-basis:100%;margin:0}.key-form .form-error:empty{display:none}
 
 .campaign-sources{margin-bottom:14px}.campaign-sources .section-head h2{font-size:20px}.alert-row details{margin-top:8px;font-size:13px}.alert-row details li{margin:5px 0;overflow-wrap:anywhere}
+
+.meli-import{margin:12px 0;color:var(--ink)}.meli-import summary{cursor:pointer;font-weight:650}.meli-import .field{max-width:480px}

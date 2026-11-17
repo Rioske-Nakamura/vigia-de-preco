@@ -9,7 +9,7 @@ Painel local para consultar e acompanhar ofertas do Mercado Livre. Requer Python
 3. Digite um produto ou cole o link HTTPS do anúncio e clique em **Buscar preços**.
 4. Use **Colocar em vigia** para acompanhar o produto. O intervalo inicial é de 60 minutos, ajustável em **Configurações**.
 
-O painel consulta diretamente a página pública do Mercado Livre, sem chave nem login. Se a página recusar a consulta automatizada ou mudar de formato, o painel mostra o motivo e o link para abrir a busca na loja. O servidor continua executando as vigias com o navegador fechado, enquanto o computador estiver ligado e conectado à internet.
+O painel consulta diretamente a página pública do Mercado Livre, sem chave nem login. Se a página recusar a consulta automatizada ou mudar de formato, o painel mostra o motivo e o link para abrir a busca na loja. Como alternativa para uma busca pontual, abra a página na loja, salve com Ctrl+S como **Página da Web, somente HTML** e importe o arquivo no painel. A importação lê os preços no seu computador. O servidor continua executando as vigias com o navegador fechado, enquanto o computador estiver ligado e conectado à internet.
 
 ## Preços, parcelas e frete
 
