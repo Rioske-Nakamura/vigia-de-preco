@@ -54,7 +54,7 @@ def configure(body):
     return dict(cep=cep, meli_plus=bool(body.get("meli_plus")), interval=number(body.get("interval"), 15, 1440))
 
 def watch_from(body):
-    query = string(body, "query")
+    query = string(body, "query", 400)
     if not words(query):
         raise ValueError("Informe o produto que quer buscar.")
     stores = body.get("stores")
@@ -64,7 +64,7 @@ def watch_from(body):
     if mode not in ("cash", "card"):
         raise ValueError("Escolha à vista ou parcelado.")
     return dict(name=string(body, "name") or query, query=query, category=string(body, "category", 40) or "Outros",
-                exclude=string(body, "exclude", 200), stores=list(dict.fromkeys(stores)),
+                exclude=string(body, "exclude", 200), stores=["meli"],
                 target=money(body, "target"), mode=mode, provisional=bool(body.get("provisional")))
 
 def coupon_from(body, watches):
@@ -138,7 +138,9 @@ def discount(c, base):
 def calc(offer, watch_id, mode, state):
     settings = state["settings"]
     if mode == "card":
-        base = offer["installments"] * offer["installment_value"] if offer["installments"] else None
+        base = offer.get("card_total")
+        if base is None and offer["installments"] and offer["installment_value"] is not None:
+            base = offer["installments"] * offer["installment_value"]
     else:
         base = offer["cash"] if offer["cash"] is not None else offer["price"]
     if base is None:
@@ -146,18 +148,22 @@ def calc(offer, watch_id, mode, state):
     freight = offer["freight"] if offer["freight_cep"] == settings["cep"] else None
     if offer.get("meli_freight") and not settings["meli_plus"]:
         freight = None
+    advertised_coupon = offer.get("coupon_price", False) and mode == "cash"
     candidates = [c for c in state["coupons"].values()
-                  if c["store"] == offer["store"] and c["watch"] in ("", watch_id)
+                  if not advertised_coupon and c["store"] == offer["store"] and c["watch"] in ("", watch_id)
                   and c["mode"] in ("both", mode) and (not c["expiry"] or c["expiry"] >= today())
                   and (not c["meli_plus"] or settings["meli_plus"])]
     # Cupom incide no subtotal do produto, sem frete ou juros do cartão.
     product_base = min(base, offer["price"]) if mode == "card" else base
     confirmed, codes = coupon_best(candidates, product_base, offer["verified"])
     estimate, sim_codes = coupon_best(candidates, product_base)
-    effective = None if freight is None else base + freight - confirmed
+    shipping_estimate = offer.get("shipping_estimate") if freight is None else None
+    effective = None if freight is None or advertised_coupon else base + freight - confirmed
     return dict(base=base, freight=freight, total=effective, subtotal=base-confirmed, discount=confirmed, codes=codes,
                 simulation=(base + freight - estimate if freight is not None else None) if estimate > confirmed else None,
-                sim_discount=estimate if estimate > confirmed else 0, sim_codes=sim_codes if estimate > confirmed else [])
+                sim_discount=estimate if estimate > confirmed else 0, sim_codes=sim_codes if estimate > confirmed else [],
+                advertised_coupon=advertised_coupon, shipping_estimate=shipping_estimate,
+                estimated_total=None if shipping_estimate is None else base + shipping_estimate - confirmed)
 
 class App:
     def __init__(self, directory, config):
@@ -180,7 +186,7 @@ class App:
 
     def trigger_coupons(self, force=True):
         with self.lock:
-            sources = campanhas.sources(self.cfg)
+            sources = {key: src for key, src in campanhas.sources(self.cfg).items() if src[0] == "meli"}
             if force:
                 due = sources
             else:
@@ -252,6 +258,26 @@ class App:
                 minimum=coupon["minimum"], source=coupon["source"], terms=coupon["terms"]))
             del state["alerts"][200:]
 
+    def evaluate_public_coupons(self, watch_id, offers):
+        grouped = {}
+        for offer in offers:
+            if not offer.get("public_coupon"):
+                continue
+            code = offer.get("coupon_code", "")
+            # Without a visible code, keep each listing separate.
+            key = code or offer["url"]
+            found = grouped.setdefault(key, {
+                "id": "publico:" + key, "code": code or "Cupom anunciado", "source": "Mercado Livre",
+                "title": "Cupom exibido no anúncio", "products": [],
+            })
+            found["products"].append({
+                "title": offer["title"], "url": offer["url"],
+                "price": None if offer.get("coupon_price") else offer["price"] / 100,
+                "coupon_price": offer["price"] / 100 if offer.get("coupon_price") else None,
+            })
+        for data in grouped.values():
+            self.evaluate_campaign(campanhas.campaign("meli", data), watch_id)
+
     def commit(self):
         tmp = self.path.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8", opener=lambda path, flags: os.open(path, flags, 0o600)) as f:
@@ -282,11 +308,13 @@ class App:
                 if p["total"] is not None and p["total"] <= watch["target"]:
                     options["final"].append((p["total"], o, ""))
                 elif watch.get("provisional") and p["base"] is not None:
-                    amount = p["simulation"] if p["freight"] is not None else p["subtotal"] - p["sim_discount"]
+                    amount = p["simulation"] if p["freight"] is not None else p["subtotal"] + (p.get("shipping_estimate") or 0) - p["sim_discount"]
                     if amount is not None and amount <= watch["target"]:
                         pending = []
                         if p["freight"] is None:
                             pending.append("frete")
+                        if p.get("advertised_coupon"):
+                            pending.append("cupom anunciado")
                         if p["sim_codes"]:
                             pending.append("cupom " + " + ".join(p["sim_codes"]))
                         if pending:
@@ -327,11 +355,9 @@ class App:
                     "history": [{"time": h.get("first_seen", h["time"]), "price": h["price"]} for h in record["history"]]}
                     for key, record in self.state["offers"].get(w, {}).items()]
             state["sources"] = {s: self.providers.enabled(s) for s in STORES}
-            state["shopping"] = bool(self.cfg.get("SERPAPI_KEY"))
-            state["coupon_sources"] = {key: store for key, (store, _) in campanhas.sources(self.cfg).items()}
+            state["coupon_sources"] = {key: store for key, (store, _) in campanhas.sources(self.cfg).items() if store == "meli"}
             state["coupons_running"] = self.coupons_running
             state.pop("coupon_seen", None)
-            state["native_sources"] = {s: self.providers.native_enabled(s) for s in STORES}
             state["running"] = self.running
             return state
 
@@ -345,7 +371,7 @@ class App:
             return [], dict(state="error", message="Formato inesperado da fonte (" + type(exc).__name__ + ").", time=now())
 
     def search(self, params):
-        query = string(params, "query")
+        query = string(params, "query", 400)
         if not words(query):
             raise ValueError("Informe o produto que quer buscar.")
         if not self.search_slots.acquire(blocking=False):
@@ -355,16 +381,12 @@ class App:
             with self.lock:
                 settings = self.state["settings"].copy()
                 calculation = dict(settings=settings, coupons=copy.deepcopy(self.state["coupons"]))
-            stores = [s for s in STORES if self.providers.enabled(s)]
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                results = {store: pool.submit(self.query_store, store, watch, settings) for store in stores}
-                responses = {store: job.result() for store, job in results.items()}
+            offers, status = self.query_store("meli", watch, settings)
             return {
                 "query": query,
-                "links": {s: url_for(s, query) for s in STORES},
-                "scans": {s: status for s, (_, status) in responses.items()},
-                "offers": [{**o, **{m: calc(o, "", m, calculation) for m in ("cash", "card")}}
-                           for offers, _ in responses.values() for o in offers],
+                "links": {"meli": url_for("meli", query)},
+                "scans": {"meli": status},
+                "offers": [{**o, **{m: calc(o, "", m, calculation) for m in ("cash", "card")}} for o in offers],
             }
         finally:
             self.search_slots.release()
@@ -405,6 +427,7 @@ class App:
                                     rec["active"] = False
                             for o in offers:
                                 self.save_offer(wid, o, "auto")
+                            self.evaluate_public_coupons(wid, offers)
                         self.commit()
                 with self.lock:
                     current = self.state["watches"].get(wid)
@@ -441,22 +464,7 @@ class App:
         with self.lock:
             s = self.state
             wid = string(b, "id")
-            if action == "shopping-key":
-                key = string(b, "key", 256)
-                if not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", key):
-                    raise ValueError("Confira a chave copiada da SerpApi.")
-                new_cfg = {**self.cfg, "SERPAPI_KEY": key}
-                tmp = self.config_path.with_suffix(".write.tmp")
-                with open(tmp, "w", encoding="utf-8", opener=lambda path, flags: os.open(path, flags, 0o600)) as f:
-                    json.dump(new_cfg, f, indent=2)
-                    f.write("\n")
-                tmp.replace(self.config_path)
-                with self.providers.shopping_lock:
-                    self.cfg["SERPAPI_KEY"] = key
-                    self.providers.shopping_cache.clear()
-                for w in s["watches"].values():
-                    w.update(last_attempt=0, rev=uuid4().hex)
-            elif action == "settings":
+            if action == "settings":
                 settings = configure(b)
                 if settings["cep"] != s["settings"]["cep"]:
                     for w in s["watches"].values():

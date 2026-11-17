@@ -13,14 +13,22 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import meli_publico
+
 STORES = {"meli": "Mercado Livre", "amazon": "Amazon", "kabum": "KaBuM!"}
 DOMAINS = {"meli": "mercadolivre.com.br", "amazon": "amazon.com.br", "kabum": "kabum.com.br"}
 
 class ProviderError(Exception):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 def url_for(store, query):
-    q = urllib.parse.quote(query, safe="")
+    if store == "meli":
+        product = meli_publico.product_url(query, "https://www.mercadolivre.com.br") if query.startswith("https://") else ""
+        if product:
+            return product
+    q = urllib.parse.quote("-".join(query.split()) if store == "meli" else query, safe="")
     return {
         "meli": f"https://lista.mercadolivre.com.br/{q}",
         "amazon": f"https://www.amazon.com.br/s?k={q}",
@@ -76,7 +84,7 @@ def request(url, *, headers=None, data=None, limit=8_000_000):
         return raw
     except urllib.error.HTTPError as e:
         raise ProviderError({401: "Credencial inválida ou expirada.", 403: "A fonte recusou o acesso.",
-                             429: "Limite de consultas da fonte atingido."}.get(e.code, f"Resposta HTTP {e.code} da fonte.")) from None
+                             429: "Limite de consultas da fonte atingido."}.get(e.code, f"Resposta HTTP {e.code} da fonte."), status=e.code) from None
     except (OSError, ValueError):
         raise ProviderError("Falha de conexão ou formato da resposta.") from None
 
@@ -106,6 +114,8 @@ class Providers:
         self.locks = {store: threading.Lock() for store in STORES}
         self.shopping_lock = threading.Lock()
         self.shopping_cache = {}
+        self.public_cache = {}
+        self.public_retry_at = 0
 
     def native_enabled(self, store):
         return bool({
@@ -118,13 +128,54 @@ class Providers:
         }[store])
 
     def enabled(self, store):
-        return self.native_enabled(store) or bool(self.cfg.get("SERPAPI_KEY"))
+        return store == "meli"
 
     def scan(self, store, watch, settings):
-        if not self.native_enabled(store):
-            return self.shopping(store, watch)
+        if store != "meli":
+            return []
         with self.locks[store]:
-            return self.scan_native(store, watch, settings)
+            return self.meli_public(watch)
+
+    def meli_public(self, watch):
+        url = url_for("meli", watch["query"])
+        detail = not url.startswith("https://lista.mercadolivre.com.br/")
+        now = time.monotonic()
+        cached = self.public_cache.get(url)
+        if cached and cached[0] > now:
+            rows = cached[1]
+        else:
+            if now < self.public_retry_at:
+                raise ProviderError("O Mercado Livre recusou consultas automáticas deste computador. Abra a busca na loja ou tente mais tarde.")
+            try:
+                html = request(url, headers={"Accept": "text/html", "Accept-Language": "pt-BR,pt;q=0.9"})
+            except ProviderError as exc:
+                if exc.status in (403, 429):
+                    self.public_retry_at = now + 900
+                    raise ProviderError("O Mercado Livre recusou a consulta direta. Abra a busca na loja ou tente mais tarde.") from None
+                raise
+            rows = meli_publico.parse(html.decode("utf-8", errors="replace"), url, detail)
+            if rows is None:
+                raise ProviderError("A página pública não retornou preços reconhecíveis. Abra a busca na loja para conferir.")
+            if len(self.public_cache) >= 60:
+                self.public_cache.pop(next(iter(self.public_cache)))
+            self.public_cache[url] = (now + 180, rows)
+        offers = {}
+        for row in rows:
+            if not detail and not matches(row["title"], watch):
+                continue
+            fields = {k: v for k, v in row.items() if k not in ("title", "url", "price")}
+            shipping_text = row.get("shipping_text", "")
+            shipping = words(shipping_text)
+            if not any(term in shipping for term in ("acima de", "a partir", "meli", "primeira compra")):
+                if "frete gratis" in shipping or re.search(r"\bchegara .*gratis\b", shipping):
+                    fields["shipping_estimate"] = 0
+                else:
+                    advertised = re.fullmatch(r"frete\s+" + meli_publico.MONEY, shipping_text, re.I)
+                    if advertised:
+                        fields["shipping_estimate"] = meli_publico.price(advertised[1])
+            offers.setdefault(row["url"], make_offer("meli", row["url"], row["title"], row["url"], row["price"],
+                provider="meli_public", note="Preço exibido na página pública do Mercado Livre.", **fields))
+        return list(offers.values())[:20]
 
     def scan_native(self, store, watch, settings):
         method = {"meli": self.meli, "amazon": self.amazon, "kabum": self.kabum}[store]

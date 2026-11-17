@@ -6,33 +6,18 @@
 <h1>Como rodar o Vigia de Preço</h1>
 <div class="card">
   <p>No Windows, extraia o ZIP, instale o <a href="https://www.python.org/downloads/">Python 3.10 ou mais recente</a> e clique duas vezes em <strong>Iniciar-Vigia.bat</strong>. No Linux ou macOS, abra um terminal na pasta e execute <code>python3 app.py</code>. Abra <a href="http://127.0.0.1:8765">http://127.0.0.1:8765</a>.</p>
-  <p>Em <strong>Configurações</strong>, ajuste seu CEP e a preferência Meli+. O intervalo inicial é de 60 minutos. O painel pode ficar fechado. O computador precisa permanecer acordado, com internet e com o servidor rodando.</p>
+  <p>O painel consulta a página pública do Mercado Livre sem chave. Digite o nome do produto ou cole o link de um anúncio. Use <strong>Colocar em vigia</strong> para definir o preço-alvo e acompanhar mudanças.</p>
+  <p>O intervalo inicial é de 60 minutos. O navegador pode ficar fechado. Mantenha o computador acordado, com internet e com o servidor em execução.</p>
 </div>
-<h2>Ativar as fontes de preços</h2>
-<p>Para as integrações próprias das lojas, copie <code>config.exemplo.json</code> como <code>config.local.json</code> se ele ainda não existir. Preencha somente os campos da fonte que você tem e reinicie o servidor. Mantenha esse arquivo e a pasta <code>dados</code> no seu computador.</p>
-<h3 id="shopping">Busca única por nome nas três lojas</h3>
-<p>Crie uma chave na <a href="https://serpapi.com/">SerpApi</a>, cole a chave em <strong>Configurações → Busca única nas três lojas</strong> e clique em <strong>Salvar chave</strong>. No painel, digite o produto em <strong>Buscar preços</strong>. Os resultados do Google Shopping Brasil aparecem para as lojas sem uma integração própria configurada. O preço é do anúncio indexado. Frete e parcelas anunciados podem aparecer como referência, e os valores do checkout continuam dependendo do CEP e da conta.</p>
-<p>A SerpApi tem cota de consultas conforme o plano. A busca e a vigia usam a mesma chave. Se o plano tiver cota pequena, aumente o intervalo em Configurações. Use os links das lojas para conferir o estoque e o preço final.</p>
-<h3 id="meli">Mercado Livre</h3>
-<p>Cadastre um aplicativo no <a href="https://developers.mercadolivre.com.br/pt_br/api-docs-pt-br/crie-uma-aplicacao-no-mercado-livre">DevCenter</a>. Siga o <a href="https://developers.mercadolivre.com.br/pt_br/obtencao-do-access-token">fluxo oficial de autorização</a> para obter os tokens. Para uso contínuo, preencha <code>MELI_CLIENT_ID</code>, <code>MELI_CLIENT_SECRET</code> e <code>MELI_REFRESH_TOKEN</code>. Se quiser testar o acesso inicial, use apenas <code>MELI_ACCESS_TOKEN</code> até ele expirar. O painel renova e guarda o token rotativo em <code>dados/meli-tokens.json</code>. Após revogar ou trocar de aplicativo, pare o servidor, remova esse arquivo antigo e configure um novo refresh token.</p>
-<p>A busca usa o catálogo, incluindo o anúncio vencedor de cada resultado compatível. O frete por CEP depende das opções que a API devolver. Para registrar o frete Meli+, use o valor que você viu no carrinho com sua conta.</p>
-<h3 id="amazon">Amazon Brasil</h3>
-<p>Preencha <code>KEEPA_KEY</code> com a chave de um <a href="https://keepa.com/#!api">plano da API Keepa</a>. Para economizar tokens e fixar uma variante, cadastre o ASIN do produto como termo de busca. Para buscar o nome nas outras lojas, crie outra vigia. Os preços vêm do catálogo da Amazon Brasil no Keepa. Consulte frete, Prime, cupons e condições no checkout com a sua conta.</p>
-<h3 id="kabum">KaBuM!</h3>
-<p>Se o seu cadastro de afiliado tiver acesso ao catálogo da KaBuM na <a href="https://www.kabum.com.br/hotsite/afiliados/">Awin</a>, use <a href="https://help.awin.com/developers/docs/downloading-feeds-using-create-a-feed">Create-a-Feed</a> para gerar um link CSV legado de <code>productdata.awin.com</code>, sem compactação ou em gzip, delimitado por vírgula ou ponto e vírgula. Inclua <code>product_name</code>, <code>search_price</code> e <code>merchant_deep_link</code>. Se disponíveis, inclua <code>currency</code>, <code>in_stock</code> e <code>store_price</code>. Preencha <code>KABUM_AWIN_CSV</code> com o link gerado. O catálogo é reutilizado por até 15 minutos entre consultas.</p>
-<h2 id="cupons-auto">Vigia automática de cupons</h2>
-<p>O servidor verifica as campanhas no intervalo configurado e compara os produtos da lista com todas as vigias ativas da loja. O alerta fica salvo na aba <strong>Alertas</strong>, mesmo com a aba do navegador fechada. Em <strong>Cupons</strong>, use <strong>Verificar cupons</strong> para rodar uma consulta imediata e conferir o status da fonte.</p>
-<h3>KaBuM via Awin</h3>
-<p>Se você participa do programa KaBuM na Awin, preencha <code>AWIN_PUBLISHER_ID</code> e <code>AWIN_API_TOKEN</code> em <code>config.local.json</code> e reinicie o servidor. A API de Ofertas da Awin fornece campanhas, condições e links. Quando a campanha só fornece um link ou descrição, o painel pode alertar uma <strong>possível correspondência</strong>. O alerta se refere ao anúncio da campanha. Confira elegibilidade e estoque na loja.</p>
-<h3>Feeds de produtos elegíveis</h3>
-<p>Se tiver um feed JSON autorizado, coloque a URL HTTPS em <code>COUPON_FEEDS</code> na chave <code>meli</code>, <code>amazon</code> ou <code>kabum</code>. O README descreve o formato. O painel percorre toda a lista entregue pela fonte e mostra os produtos relacionados. Condições de pagamento e estoque podem afetar o preço final. Cupons privados e benefícios que só aparecem no checkout ficam disponíveis para conferência na sua conta.</p>
-<h2>Comparar ofertas e cupons</h2>
+<h2>Como o total é calculado</h2>
 <ul>
-<li>Cadastre uma vigia por variante ou volume. Use termos específicos e palavras de exclusão para reduzir acessórios e edições diferentes.</li>
-<li>Abra a busca da loja na sua sessão habitual. Em <strong>Registrar oferta</strong>, informe o preço antes do cupom, o frete para o CEP atual e o valor de cada parcela antes do cupom e do frete. Use zero quando o frete estiver confirmado como grátis.</li>
-<li>Em <strong>Cupons</strong>, registre código, validade, modalidade de pagamento, compra mínima, teto e produto elegível. Informe na oferta os códigos aceitos no checkout. Para descontos cumulativos, use o mesmo grupo somente quando a loja aceitar a combinação. O painel testa cupons individuais e grupos cadastrados, com percentuais antes dos descontos fixos e mínimo calculado sobre o saldo a cada aplicação.</li>
-<li>Confira os totais no checkout. O total parcelado é a soma das parcelas, acrescida do frete, com o desconto calculado sobre o produto. O painel preserva o valor unitário de referência das parcelas antes dos ajustes. Cashback, moedas, variações de juros após cupom e cupons de carrinho com vários produtos ficam fora do cálculo.</li>
-<li>Um alerta de total usa frete conhecido e cupons confirmados. O alerta provisório pode usar um preço sem frete ou um cupom simulado. Atualize o registro manual quando as condições da conta mudarem.</li>
+<li><strong>À vista:</strong> valor exibido no anúncio, com distinção para Pix ou preço anunciado com cupom quando identificável.</li>
+<li><strong>Parcelado:</strong> usa o total mostrado no anúncio ou multiplica o valor de cada parcela pela quantidade.</li>
+<li><strong>Frete:</strong> quando a página divulga o valor ou entrega grátis, o painel pode mostrar um total estimado. O frete depende do CEP e da conta. Use <strong>Registrar checkout</strong> para informar o valor confirmado.</li>
 </ul>
-<p>Os três atalhos de busca e os registros manuais funcionam sem configurar APIs. O painel guarda suas vigias, ofertas e alertas em <code>dados/vigia.json</code>. Faça uma cópia da pasta <code>dados</code> para levar seus registros a outro computador. Uma instância por pasta de dados.</p>
+<h2 id="cupons-auto">Vigia de cupons</h2>
+<p>Quando o painel encontra um cupom visível em um anúncio monitorado, ele salva um aviso em <strong>Alertas</strong>. Quando o anúncio mostrar o valor com cupom, esse valor aparece como condicional. A detecção cobre anúncios retornados na busca, de acordo com o que a página pública exibir.</p>
+<p>Para simular um cupom manualmente, registre o código e suas condições na aba <strong>Cupons</strong>. Valores de Meli+ e códigos exclusivos da sua conta podem ser conferidos na loja e registrados no painel.</p>
+<h2>Quando a loja recusar a consulta</h2>
+<p>Use <strong>Abrir no Mercado Livre</strong> para conferir as ofertas. Se a loja recusar uma consulta, o painel informa o bloqueio e aguarda antes de realizar novas consultas. O histórico anterior continua disponível nas vigias.</p>
 </main></body></html>

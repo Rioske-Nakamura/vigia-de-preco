@@ -93,10 +93,9 @@ function updateHeader() {
 
 function metrics() {
   const w = Object.values(state.watches).filter(o => o.active).length;
-  const c = Object.values(state.sources).filter(Boolean).length;
   const a = state.alerts.filter(o => !o.read).length;
   return `<section class="metrics" aria-label="Resumo">${[
-    ["⌖", "Vigias ativas", w], ["≡", "Fontes configuradas", c + " / 3"], ["♧", "Alertas novos", a],
+    ["⌖", "Vigias ativas", w], ["≡", "Loja monitorada", "Mercado Livre"], ["♧", "Alertas novos", a],
   ].map(([i, label, value]) => `<div class="metric"><i aria-hidden="true">${i}</i><span><small>${label}</small><strong>${value}</strong></span></div>`).join("")}</section>`;
 }
 
@@ -106,9 +105,9 @@ function dashboard() {
     <div class="hero-copy">
       <span class="chip"><span class="dot"></span> Monitoramento local · a cada ${state.settings.interval} min</span>
       <h1>Busque e compare preços.</h1>
-      <p>Veja ofertas das lojas e coloque o produto em vigia quando quiser.</p>
+      <p>Veja as ofertas do Mercado Livre ou cole o link de um anúncio.</p>
       <form id="product-search" class="hero-search" role="search">
-        <input name="query" aria-label="Produto para buscar" placeholder="Ex.: Galaxy S25 256 GB" required maxlength="160" value="${esc(searchText)}">
+        <input name="query" aria-label="Produto para buscar" placeholder="Ex.: Galaxy S25 256 GB" required maxlength="400" value="${esc(searchText)}">
         <button class="light" ${searchPending ? "disabled" : ""}>${searchPending ? "Buscando…" : "Buscar preços"}</button>
       </form>
     </div>
@@ -126,14 +125,12 @@ function dashboard() {
     </div><div id="watch-list">${watchList()}</div>` : `<div class="card empty">
       <div class="examples">${EXAMPLES.map(([title, cat], i) => button("example", icon(ICONS[CATEGORIES.indexOf(cat)]) + `<span>${esc(title)}<small>${cat}</small></span>`, "example", `data-index="${i}"`)).join("")}</div>
     </div>`}
-    <div class="sourcebar"><strong>Lojas</strong>
-    ${Object.keys(STORES).map(s => badge(STORES[s] + (state.sources[s] ? " · Automática" : " · Busca na loja"), state.sources[s] ? "ok" : "")).join("")}
-    <a href="#ajustes">Configurar fontes →</a></div>
+    <div class="sourcebar">${shop("meli")} <span>Consulta à página pública</span></div>
   </section>`;
 }
 
 function searchPanel() {
-  if (searchPending) return '<section id="search-results" class="card search-results" aria-live="polite">Consultando as fontes de preço…</section>';
+  if (searchPending) return '<section id="search-results" class="card search-results" aria-live="polite">Consultando o Mercado Livre…</section>';
   if (searchError) return `<section id="search-results" class="card search-results" role="alert">${esc(searchError)}</section>`;
   if (!searchResult) return "";
   const {query, scans, links, offers} = searchResult;
@@ -141,20 +138,13 @@ function searchPanel() {
     Number(b.cash.total != null) - Number(a.cash.total != null) ||
     (a.cash.total ?? a.cash.base) - (b.cash.total ?? b.cash.base)
   ));
-  const configured = Object.keys(scans).length > 0;
-  const resultsText = configured ? (rows.length
-    ? `${rows.length} oferta(s). Totais com frete conhecido aparecem primeiro.`
-    : "Nenhuma oferta compatível retornada pelas fontes configuradas.")
-    : "Ative uma fonte de preços para ver ofertas aqui. Você pode começar com uma chave da SerpApi.";
+  const status = scans.meli;
+  const resultsText = status.state === "error" ? status.message : rows.length
+    ? `${rows.length} oferta(s) na página do Mercado Livre.` : "Nenhuma oferta compatível nesta página.";
   return `<section id="search-results" class="card search-results" aria-labelledby="results-title">
     <div class="section-head"><div><h2 id="results-title">${esc(query)}</h2><p>${esc(resultsText)}</p></div>
       ${button("watch-search","+ Colocar em vigia","primary")}</div>
-    ${!configured ? '<p><a href="/guia#shopping" target="_blank" rel="noopener">Configurar busca automática ›</a></p>' : ""}
-    <div class="source-line">${Object.entries(STORES).map(([key,label]) => {
-      const result = scans[key];
-      const status = result?.state === "error" ? result.message : result ? `${result.count} oferta(s)` : "Fonte por configurar";
-      return `<span>${shop(key)} ${link(links[key], "Buscar na loja")} ${esc(status)}</span>`;
-    }).join("")}</div>
+    <div class="source-line">${shop("meli")} ${link(links.meli, "Abrir no Mercado Livre")}</div>
     ${rows.length ? `<div class="table-box"><table class="table"><thead><tr><th>Oferta</th><th>À vista + frete</th><th>Parcelado + frete</th></tr></thead><tbody>
       ${rows.map(o => `<tr><td><div class="offer-name"><strong>${esc(o.title)}</strong></div>${shop(o.store)}
           ${o.old > o.price ? badge("De " + cur(o.old), "ok") : ""}<small>${esc(o.note)}</small>
@@ -193,12 +183,12 @@ function watchRow(id, w) {
   </div>
   ${w.stores.map(s => {
     const log = state.scans[id]?.[s];
-    const desc = !state.sources[s] ? "Fonte automática por configurar" : !log ? "Aguardando consulta" :
+    const desc = !state.sources[s] ? "Consulta automática pausada nesta loja" : !log ? "Aguardando consulta" :
       log.state === "ok" ? `${log.count} resultado(s) · ${stamp(log.time)}` : log.message + " · " + stamp(log.time);
     return `<div class="source-line">${shop(s)} ${link(w.links[s], "Buscar na loja")} <span>${esc(desc)}</span></div>`;
   }).join("")}
   <h3>Comparação de ofertas</h3>
-  ${current.length ? offerTable(id,current) : '<p class="hint">Sem ofertas atuais. Configure uma fonte ou registre os valores que encontrar na loja.</p>'}
+  ${current.length ? offerTable(id,current) : '<p class="hint">Sem ofertas atuais. Se o Mercado Livre recusar a consulta, abra a busca na loja.</p>'}
   ${history.length ? `<details><summary>Resultados anteriores e indisponíveis (${history.length})</summary>${offerTable(id,history)}</details>` : ""}
   </div></details>`;
 }
@@ -206,12 +196,16 @@ function watchRow(id, w) {
 function payCell(o, mode) {
   const p = o[mode];
   if (p.base == null) return "<span class='dim'>Não informado</span>";
-  const origin = mode === "cash" ? (o.cash != null ? "À vista informado" : "Preço do anúncio") :
-    `${o.installments}× de ${cur(o.installment_value)} antes de descontos`;
+  const origin = mode === "cash" ? (p.advertised_coupon ? "Preço anunciado com cupom" : o.cash != null ? "À vista informado" : "Preço do anúncio") :
+    o.installment_value != null ? `${o.installments}× de ${cur(o.installment_value)} antes de descontos` : `Total anunciado em ${o.installments}×`;
+  const display = p.total != null ? cur(p.total) : p.estimated_total != null ? cur(p.estimated_total) : cur(p.subtotal) + " + frete";
+  const shipping = p.estimated_total != null ? `<small>${badge("Estimativa", "warn")} ${p.shipping_estimate === 0 ? "Frete grátis anunciado" : "Frete anunciado " + cur(p.shipping_estimate)} · confirme no CEP</small>` :
+    o.shipping_text ? `<small>${esc(o.shipping_text)} · confira na loja</small>` : "";
+  const coupon = o.public_coupon && mode === "cash" ? `<small>${badge(o.coupon_code || "Cupom anunciado", "warn")} confira no checkout</small>` : "";
   const simulation = p.sim_codes.length ? `<small>${badge("Simulação", "warn")} ${p.simulation == null ? "Desconto de " + cur(p.sim_discount) : cur(p.simulation)} · ${esc(p.sim_codes.join(" + "))}</small>` : "";
-  return `<strong>${p.total == null ? cur(p.subtotal) + " + frete" : cur(p.total)}</strong>
+  return `<strong>${display}</strong>
   <small>${esc(origin)}${p.freight == null ? "" : " · " + (p.freight ? "Frete " + cur(p.freight) : "Frete grátis")}${p.freight != null && o.meli_freight ? " · Meli+" : ""}</small>
-  ${p.codes.length ? `<small>${badge("Cupom confirmado", "ok")} ${esc(p.codes.join(" + "))} · −${cur(p.discount)}</small>` : ""}${simulation}`;
+  ${p.codes.length ? `<small>${badge("Cupom confirmado", "ok")} ${esc(p.codes.join(" + "))} · −${cur(p.discount)}</small>` : ""}${simulation}${shipping}${coupon}`;
 }
 
 function offerTable(id, offers) {
@@ -243,8 +237,8 @@ function couponSources() {
       const message = result?.state === "ok" ? `${result.count} cupom(ns) · ${stamp(result.time)}` :
         result?.message || "Aguardando consulta";
       return `<div class="source-line">${shop(store)} <span>${key === "awin" ? "Awin" : "Feed de cupons"} · ${esc(message)}</span></div>`;
-    }).join("") : '<p class="hint">Configure a Awin ou um feed que forneça os cupons e a lista de produtos.</p>'}
-    <div class="source-line"><a href="/guia#cupons-auto" target="_blank" rel="noopener">Configurar fontes de cupons ›</a>
+    }).join("") : '<p class="hint">O painel verifica os cupons exibidos nos anúncios durante a consulta das vigias do Mercado Livre.</p>'}
+    <div class="source-line"><a href="/guia#cupons-auto" target="_blank" rel="noopener">Como funciona ›</a>
       <a href="#alertas">Ver alertas de correspondência ›</a></div>
   </section>`;
 }
@@ -270,7 +264,7 @@ function alerts() {
     (state.alerts.length ? `<div class="alert-list">${state.alerts.map(a => a.kind === "coupon" ?
       `<article class="card alert-row">${icon("◇")}
       <div class="info"><strong>${esc(a.name)} · Cupom ${esc(a.code)}</strong> ${a.read ? "" : badge("Novo","ok")}
-      ${badge(a.match === "listed" ? "Produto na lista da campanha" : "Possível correspondência", a.match === "listed" ? "ok" : "warn")}
+      ${badge(a.source === "Mercado Livre" ? "Cupom exibido no anúncio" : a.match === "listed" ? "Produto na lista da campanha" : "Possível correspondência", a.match === "listed" ? "ok" : "warn")}
       <p>${esc(a.title)} · ${esc(a.source)} · ${stamp(a.time)}${a.expires ? " · Até " + stamp(a.expires) : ""}</p>
       ${a.minimum ? `<p>Compra mínima de ${cur(a.minimum)}</p>` : ""}
       ${a.terms ? `<p>${esc(a.terms)}</p>` : ""}
@@ -282,39 +276,22 @@ function alerts() {
       <div class="info"><strong>${esc(a.name)} · ${cur(a.price)}</strong> ${a.read ? "" : badge("Novo","ok")} ${a.note ? badge("Provisório", "warn") : ""}
       <p>${esc(a.title)} · ${a.mode === "cash" ? "À vista" : "Parcelado"} · ${stamp(a.time)}${a.note ? " · " + esc(a.note) : ""}</p></div>
       ${link(a.url, a.external ? "Google Shopping" : STORES[a.store])}</article>`).join("")}</div>` :
-      '<div class="card empty"><h3>Nenhum alerta ainda</h3><p>Defina um preço-alvo ou conecte uma fonte de cupons para suas vigias.</p></div>');
+      '<div class="card empty"><h3>Nenhum alerta ainda</h3><p>Defina um preço-alvo ou aguarde os cupons anunciados nos itens em vigia.</p></div>');
 }
 
 function settings() {
   const s = state.settings;
-  const descriptions = {
-    meli: "Catálogo e consulta de frete por CEP via API. O benefício Meli+ pode ser registrado após conferência.",
-    amazon: "Preços de catálogo via Keepa Brasil, com chave de um plano de API. Prime e cupons da conta ficam no checkout.",
-    kabum: "Catálogo CSV da KaBuM via Awin, quando disponível para seu cadastro. Valores por CEP e parcelamento podem ser registrados manualmente.",
-  };
-  return heading("Configurações", "Defina o CEP, o intervalo e as fontes de consulta.") + `
+  return heading("Configurações", "Defina o CEP de referência e o intervalo da vigia.") + `
   <div class="card form-card"><h2>Entrega e monitoramento</h2>
     <form id="settings-form" data-submit="settings">
     <div class="form-grid">
-      ${field("CEP de entrega","cep",s.cep,{hint:"Usado na consulta de frete do Mercado Livre.",placeholder:"00000-000",max:9})}
+      ${field("CEP de entrega","cep",s.cep,{hint:"Referência para os valores de checkout que você registrar.",placeholder:"00000-000",max:9})}
       ${field("Intervalo em minutos","interval",s.interval,{type:"number",min:15,max:1440,required:true,hint:"Entre 15 e 1.440 minutos."})}
       <div class="wide">${check("meli_plus","Tenho Meli+",s.meli_plus)}</div>
     </div><p class="form-error" role="alert"></p><div class="form-footer"><button class="primary">Salvar ajustes</button></div></form>
   </div>
-  <div class="form-section"><h2>Fontes de preço</h2>
-    <p class="hint">Última rodada: ${stamp(state.last_run)}. A vigia funciona com o computador ligado e o servidor em execução.</p>
-    <div class="card"><h3>Busca única nas três lojas</h3>
-      <p class="hint">Uma chave da SerpApi habilita os resultados do Google Shopping nas lojas sem integração própria configurada.</p>
-      ${badge(state.shopping ? "Chave salva" : "Por configurar",state.shopping ? "ok" : "warn")} <a href="/guia#shopping" target="_blank" rel="noopener">Como obter a chave ›</a>
-      <form data-submit="shopping-key" class="key-form">
-        ${field("Chave da SerpApi","key","",{type:"password",required:true,max:256,placeholder:state.shopping ? "Cole uma nova chave para substituir" : "Cole sua chave"})}
-        <div class="form-footer"><button class="primary">Salvar chave</button></div>
-        <p class="form-error" role="alert"></p>
-      </form></div>
-    <div class="source-grid">${Object.keys(STORES).map((key,i) => `<article class="card">
-      ${icon(["↗","a","▧"][i], i === 1 ? "peach" : "")}
-      <h3>${STORES[key]}</h3>${badge(state.native_sources[key] ? "Fonte da loja" : state.shopping ? "Google Shopping" : "Por configurar",state.sources[key] ? "ok" : "warn")}
-      <p>${descriptions[key]}</p><a href="/guia#${key}" target="_blank" rel="noopener">Como conectar ›</a></article>`).join("")}</div>
+  <div class="form-section"><h2>Mercado Livre</h2>
+    <p class="hint">Consulta à página pública, sem chave. Última rodada: ${stamp(state.last_run)}. Mantenha o computador ligado e o servidor em execução.</p>
   </div>`;
 }
 
@@ -382,7 +359,7 @@ function watchForm(id, sample) {
     ${field("Preço-alvo em R$","target",reais(w.target),{decimal:true,placeholder:"2.500,00"})}
     ${field("Forma de pagamento da meta","mode",w.mode,{options:{cash:"À vista",card:"Parcelado · pelo total"}})}
     <div class="wide">${check("provisional","Avisar também se faltar confirmar frete ou cupom",w.provisional)}</div>
-    <fieldset class="wide"><legend>Lojas</legend>${Object.entries(STORES).map(([s,n]) => check("stores",n,w.stores.includes(s),s)).join(" ")}</fieldset>
+    ${hidden("stores","meli")}
   `, "watch", id ? "Salvar vigia" : "Começar a vigiar");
 }
 
@@ -413,7 +390,7 @@ function couponForm(id) {
   const c = state.coupons[id] || {};
   showDialog(id ? "Editar cupom" : "Novo cupom", `${hidden("id",id)}
     ${field("Código","code",c.code,{required:true,placeholder:"Ex.: OFERTA10"})}
-    ${field("Loja","store",c.store || "meli",{options:STORES})}
+    ${field("Loja","store",c.store || "meli",{options:{meli:"Mercado Livre"}})}
     ${field("Tipo de desconto","kind",c.kind || "percent",{options:{percent:"Porcentagem",fixed:"Valor fixo (R$)"}})}
     ${field("Desconto","value",reais(c.value),{required:true,decimal:true,placeholder:"Ex.: 10"})}
     ${field("Compra mínima (R$)","minimum",reais(c.minimum),{decimal:true})}
@@ -459,7 +436,7 @@ document.addEventListener("click", async e => {
       case "scan-one": {
         const sources = id ? state.watches[id].stores : [...new Set(Object.values(state.watches).filter(w => w.active).flatMap(w => w.stores))];
         if (!sources.length) return notify("Adicione ou retome uma vigia para consultar.");
-        if (!sources.some(s => state.sources[s])) return notify("Configure uma fonte automática nas lojas desta vigia.");
+        if (!sources.some(s => state.sources[s])) return notify("Edite a vigia para consultar no Mercado Livre.");
         pending = true;
         updateHeader();
         try {
