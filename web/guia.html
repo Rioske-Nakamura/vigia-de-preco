@@ -9,6 +9,15 @@
   <p>O painel consulta a página pública do Mercado Livre sem chave. Digite o nome do produto ou cole o link de um anúncio. Use <strong>Colocar em vigia</strong> para definir o preço-alvo e acompanhar mudanças.</p>
   <p>O intervalo inicial é de 60 minutos. O navegador pode ficar fechado. Mantenha o computador acordado, com internet e com o servidor em execução.</p>
 </div>
+<h2 id="extensao">Busca automática pelo Chrome ou Edge</h2>
+<ol>
+<li>Abra <code>chrome://extensions</code> no Chrome ou <code>edge://extensions</code> no Edge.</li>
+<li>Ative <strong>Modo do desenvolvedor</strong> e clique em <strong>Carregar sem compactação</strong>.</li>
+<li>Selecione a pasta <code>extensao</code> que veio no ZIP do Vigia.</li>
+<li>Abra <a href="http://127.0.0.1:8765">http://127.0.0.1:8765</a> e confirme <strong>Navegador conectado</strong> em Configurações.</li>
+</ol>
+<p>Essa instalação é feita uma vez. A busca e as vigias abrem e fecham abas em segundo plano. Mantenha o Chrome ou Edge aberto com a extensão ativada e o servidor local rodando. A aba do painel pode ficar fechada durante as vigias.</p>
+<p>Se o Mercado Livre apresentar uma verificação de acesso, a extensão interrompe a tentativa e aguarda 15 minutos antes de consultar de novo.</p>
 <h2>Como o total é calculado</h2>
 <ul>
 <li><strong>À vista:</strong> valor exibido no anúncio, com distinção para Pix ou preço anunciado com cupom quando identificável.</li>

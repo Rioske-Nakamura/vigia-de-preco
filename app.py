@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import campanhas
 import meli_publico
+from ponte_navegador import BrowserBridge, ORIGIN as BROWSER_ORIGIN
 from lojas import STORES, ProviderError, Providers, cents, make_offer, store_link, url_for, words
 
 ROOT = Path(__file__).resolve().parent
@@ -174,6 +175,7 @@ class App:
         self.config_path = config
         self.cfg = json.loads(config.read_text(encoding="utf-8-sig")) if config.is_file() else {}
         self.providers = Providers(self.cfg, directory)
+        self.browser = BrowserBridge()
         self.lock = threading.RLock()
         self.running = False
         self.search_slots = threading.BoundedSemaphore(2)
@@ -360,16 +362,65 @@ class App:
             state["coupons_running"] = self.coupons_running
             state.pop("coupon_seen", None)
             state["running"] = self.running
+            state["browser_connected"] = self.browser.connected()
             return state
 
     def query_store(self, store, watch, settings):
         try:
-            offers = self.providers.scan(store, watch, settings)
+            if store == "meli" and self.browser.connected():
+                offers = self.query_browser(watch)
+            else:
+                offers = self.providers.scan(store, watch, settings)
             return offers, dict(state="ok", count=len(offers), time=now())
         except ProviderError as exc:
             return [], dict(state="error", message=str(exc), time=now())
         except Exception as exc:
             return [], dict(state="error", message="Formato inesperado da fonte (" + type(exc).__name__ + ").", time=now())
+
+    def query_browser(self, watch):
+        url = url_for("meli", watch["query"])
+        result = self.browser.query(url)
+        status = result["status"]
+        if status == "verification":
+            raise ProviderError("O Mercado Livre apresentou uma verificação de acesso. A vigia pelo navegador foi pausada por 15 minutos.")
+        if status != "ok":
+            messages = {"busy": "Há consultas em andamento. Tente novamente.",
+                        "timeout": "O navegador não respondeu a tempo. Confira se a extensão e o navegador estão abertos.",
+                        "empty": "O navegador abriu a página, mas o Mercado Livre não exibiu ofertas legíveis.",
+                        "error": "A extensão não conseguiu abrir a página do Mercado Livre."}
+            raise ProviderError(messages[status])
+        detail = not url.startswith("https://lista.mercadolivre.com.br/")
+        if detail:
+            source_url = meli_publico.product_url(result.get("url"), url) if result.get("url") else ""
+            if not source_url or campanhas.product_key("meli", source_url) != campanhas.product_key("meli", url):
+                raise ProviderError("O Mercado Livre redirecionou para outro anúncio. Confira o link da vigia.")
+        rows = self.providers.parse_meli(result["html"], url, detail)
+        offers = self.providers.meli_offers(rows, watch, detail)
+        for offer in offers:
+            offer["note"] = "Oferta consultada pelo navegador no Mercado Livre."
+        return offers
+
+    def browser_action(self, path, body):
+        if path == "/api/browser-next":
+            connected = self.browser.connected()
+            job = self.browser.next_job()
+            if not connected:
+                with self.lock:
+                    for wid, checks in self.state["scans"].items():
+                        watch = self.state["watches"].get(wid)
+                        if watch and checks.get("meli", {}).get("state") == "error":
+                            watch["last_attempt"] = 0
+            return {"job": job}
+        status = body.get("status")
+        if status not in ("ok", "empty", "error", "verification"):
+            raise ValueError("Resultado da extensão inválido.")
+        result = {"status": status}
+        if status == "ok":
+            html = body.get("html")
+            if not isinstance(html, str) or not html or len(html) > 1_500_000:
+                raise ValueError("Conteúdo da extensão inválido.")
+            result.update(html=html, url=string(body, "url", 2500))
+        return {"accepted": self.browser.complete(string(body, "id"), result)}
 
     def search(self, params, imported=False):
         wid = string(params, "watch_id") if imported else ""
@@ -586,6 +637,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", mime + "; charset=utf-8")
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
+        if self.headers.get("Origin") == BROWSER_ORIGIN and self.path in ("/api/browser-next", "/api/browser-result"):
+            self.send_header("Access-Control-Allow-Origin", BROWSER_ORIGIN)
+            self.send_header("Vary", "Origin")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -610,19 +664,37 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, (ROOT / "web" / file).read_bytes(), mime)
         self.reply(404, {"error": "Página não encontrada."})
 
+    def do_OPTIONS(self):
+        if (self.local() and self.headers.get("Origin") == BROWSER_ORIGIN
+                and self.path in ("/api/browser-next", "/api/browser-result")):
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", BROWSER_ORIGIN)
+            self.send_header("Access-Control-Allow-Methods", "POST")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Vary", "Origin")
+            self.end_headers()
+        else:
+            self.reply(403, {"error": "Origem inválida."})
+
     def do_POST(self):
         host = self.headers.get("Host")
-        if not self.local() or self.headers.get("Origin") not in (None, "http://" + str(host)):
+        browser_route = self.path in ("/api/browser-next", "/api/browser-result")
+        origin = self.headers.get("Origin")
+        allowed_origin = origin == BROWSER_ORIGIN if browser_route else origin in (None, "http://" + str(host))
+        if not self.local() or not allowed_origin:
             return self.reply(403, {"error": "Origem inválida."})
         if self.headers.get_content_type() != "application/json":
             return self.reply(415, {"error": "Use JSON."})
         try:
             limit = 12_000_000 if self.path == "/api/import-meli" else 48_000
+            if browser_route:
+                limit = 10_000_000
             length = number(self.headers.get("Content-Length"), 1, limit)
             b = json.loads(self.rfile.read(length))
             if not isinstance(b, dict) or not self.path.startswith("/api/"):
                 raise ValueError("Pedido inválido.")
-            result = self.server.app.change(self.path.removeprefix("/api/"), b)
+            result = (self.server.app.browser_action(self.path, b) if browser_route else
+                      self.server.app.change(self.path.removeprefix("/api/"), b))
             self.reply(200, result)
         except OSError:
             self.reply(500, {"error": "Não foi possível gravar na pasta do Vigia. Confira a permissão de escrita."})

@@ -1,0 +1,55 @@
+import threading
+import time
+from uuid import uuid4
+
+ORIGIN = "chrome-extension://iepjdaiobphnnkmbphialgkfiedohmmg"
+
+
+class BrowserBridge:
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.jobs = {}
+        self.last_poll = None
+        self.pause_until = 0
+
+    def connected(self):
+        with self.condition:
+            return self.last_poll is not None and time.monotonic() - self.last_poll < 90
+
+    def next_job(self):
+        with self.condition:
+            self.last_poll = time.monotonic()
+            if self.pause_until > self.last_poll:
+                return None
+            if any(job["claimed"] and job["answer"] is None for job in self.jobs.values()):
+                return None
+            for key, job in self.jobs.items():
+                if not job["claimed"]:
+                    job["claimed"] = True
+                    return {"id": key, "url": job["url"]}
+            return None
+
+    def complete(self, key, result):
+        with self.condition:
+            job = self.jobs.get(key)
+            if not job or not job["claimed"] or job["answer"] is not None:
+                return False
+            job["answer"] = result
+            if result["status"] == "verification":
+                self.pause_until = time.monotonic() + 900
+            self.condition.notify_all()
+            return True
+
+    def query(self, url):
+        with self.condition:
+            if self.pause_until > time.monotonic():
+                return {"status": "verification"}
+            if len(self.jobs) >= 4:
+                return {"status": "busy"}
+            key = uuid4().hex
+            job = self.jobs[key] = {"url": url, "claimed": False, "answer": None}
+            try:
+                self.condition.wait_for(lambda: job["answer"] is not None, timeout=60)
+                return job["answer"] or {"status": "timeout"}
+            finally:
+                self.jobs.pop(key, None)

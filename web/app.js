@@ -40,6 +40,10 @@ let searchError = "";
 const expanded = new Set();
 
 async function api(action, data) {
+  if (action === "search" || action === "scan") {
+    window.postMessage("vigia-consultar", location.origin);
+    setTimeout(() => window.postMessage("vigia-consultar", location.origin), 350);
+  }
   const response = await fetch("/api/" + action, data === undefined ? {} : {
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(data),
   });
@@ -84,6 +88,8 @@ function active(id, o) {
 
 function updateHeader() {
   const count = state.alerts.filter(a => !a.read).length;
+  const status = document.querySelector("#browser-connection");
+  if (status) status.innerHTML = badge(state.browser_connected ? "Navegador conectado" : "Extensão desconectada", state.browser_connected ? "ok" : "warn");
   document.querySelector("#nav-alerts").innerHTML = count ? badge(count, "ok") : "";
   document.querySelector("#local-status").textContent = state.running ? "Consultando lojas…" : "Em execução neste computador";
   document.querySelector(".local .dot").classList.remove("off");
@@ -146,6 +152,7 @@ function searchPanel() {
     <div class="section-head"><div><h2 id="results-title">${esc(query)}</h2><p>${esc(resultsText)}</p></div>
       ${button("watch-search","+ Colocar em vigia","primary")}</div>
     <div class="source-line">${shop("meli")} ${link(links.meli, "Abrir no Mercado Livre")}</div>
+    ${status.state === "error" && !state.browser_connected ? '<p class="hint"><a href="/guia#extensao">Ativar a busca automática pelo navegador ›</a></p>' : ""}
     ${status.state === "error" ? importControl() : ""}
     ${rows.length ? `<div class="table-box"><table class="table"><thead><tr><th>Oferta</th><th>À vista + frete</th><th>Parcelado + frete</th></tr></thead><tbody>
       ${rows.map(o => `<tr><td><div class="offer-name"><strong>${esc(o.title)}</strong></div>${shop(o.store)}
@@ -304,7 +311,9 @@ function settings() {
     </div><p class="form-error" role="alert"></p><div class="form-footer"><button class="primary">Salvar ajustes</button></div></form>
   </div>
   <div class="form-section"><h2>Mercado Livre</h2>
-    <p class="hint">Consulta à página pública, sem chave. Última rodada: ${stamp(state.last_run)}. Mantenha o computador ligado e o servidor em execução.</p>
+    <span id="browser-connection">${badge(state.browser_connected ? "Navegador conectado" : "Extensão desconectada", state.browser_connected ? "ok" : "warn")}</span>
+    <p class="hint"><a href="/guia#extensao">Instalar a extensão para Chrome ou Edge ›</a></p>
+    <p class="hint">Última rodada: ${stamp(state.last_run)}. Mantenha o computador ligado e o servidor em execução.</p>
   </div>`;
 }
 
