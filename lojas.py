@@ -199,16 +199,39 @@ class Providers:
 
     def shopping(self, store, watch):
         query = watch["query"]
+        api_key = self.cfg.get("SERPAPI_KEY")
+        if not api_key:
+            raise ProviderError("Cadastre a chave da SerpApi em Configurações.")
+        search_watch = watch
+        exact = None
+        if query.startswith("https://"):
+            listing = meli_publico.product_url(query, "https://www.mercadolivre.com.br")
+            if not listing:
+                raise ProviderError("Pesquise pelo nome do produto ou informe um link de anúncio do Mercado Livre.")
+            url_parts = urllib.parse.urlsplit(listing)
+            ids = re.findall(r"(?<![A-Za-z0-9])MLB-?\d+\b", url_parts.path, re.I)
+            item_id = urllib.parse.parse_qs(url_parts.query).get("item_id", [None])[0]
+            exact = (item_id if item_id and re.fullmatch(r"MLB-?\d+", item_id, re.I) else ids[-1]).upper().replace("-", "")
+            slug = [p for p in url_parts.path.strip("/").split("/") if p not in ("p", "up")]
+            seed = re.sub(r"^MLB-?\d+-?", "", slug[0], flags=re.I).replace("-", " ").strip()
+            query = seed or exact
+            search_watch = dict(watch, query=query)
+        search_query = f"{query} Mercado Livre" if store == "meli" else query
         with self.shopping_lock:
-            key = query.casefold()
+            key = (api_key, search_query.casefold())
             old = self.shopping_cache.get(key)
             if old and old[0] > time.monotonic():
                 rows = old[1]
             else:
                 url = query_url("https://serpapi.com/search.json", engine="google_shopping",
-                                q=query, gl="br", hl="pt", google_domain="google.com.br",
-                                direct_link="true", api_key=self.cfg["SERPAPI_KEY"])
-                data = json_request(url)
+                                q=search_query, gl="br", hl="pt", google_domain="google.com.br",
+                                api_key=api_key)
+                try:
+                    data = json_request(url)
+                except ProviderError as exc:
+                    hints = {401:"Chave da SerpApi inválida. Confira em Configurações.",
+                             403:"A SerpApi recusou a chave. Confira sua conta.", 429:"A SerpApi atingiu o limite de consultas."}
+                    raise ProviderError(hints.get(exc.status, "A SerpApi não respondeu à consulta."), status=exc.status) from None
                 if data.get("error"):
                     raise ProviderError("O Google Shopping não pôde concluir a busca. Verifique a chave ou a cota da SerpApi.")
                 rows = data.get("shopping_results", [])
@@ -219,8 +242,10 @@ class Providers:
                 self.shopping_cache[key] = (time.monotonic() + 300, rows)
         results = {}
         for row in rows:
+            if not isinstance(row, dict):
+                continue
             title = row.get("title") or ""
-            if not matches(title, watch) or row.get("second_hand_condition"):
+            if not isinstance(title, str) or not title or (exact is None and not matches(title, search_watch)) or row.get("second_hand_condition"):
                 continue
             price_text = str(row.get("price", ""))
             if not re.match(r"^R\$\s*[\d.,]+\s*$", price_text):
@@ -228,10 +253,17 @@ class Providers:
             price = cents(row.get("extracted_price")) or cents(price_text)
             if not price:
                 continue
-            raw_link = row.get("direct_link") or row.get("link") or ""
-            direct = store_link(store, raw_link)
+            raw_link = row.get("direct_link") or row.get("link") or row.get("product_link") or ""
+            direct = (meli_publico.product_url(raw_link, "https://www.mercadolivre.com.br")
+                      if store == "meli" and store_link(store, raw_link) else store_link(store, raw_link))
+            if exact:
+                if not direct:
+                    continue
+                direct_ids = {m.upper().replace("-", "") for m in re.findall(r"(?<![A-Za-z0-9])MLB-?\d+\b", direct, re.I)}
+                if exact not in direct_ids:
+                    continue
             named = {
-                "meli": ("mercado livre", "mercadolivre"),
+                "meli": ("mercado livre", "mercadolivre", "mercado livre com br", "mercadolivre com br"),
                 "amazon": ("amazon", "amazon com br", "amazon brasil"),
                 "kabum": ("kabum", "kabum com br"),
             }[store]
@@ -246,15 +278,20 @@ class Providers:
             old_price = str(row.get("old_price") or "")
             previous = cents(old_price) if old_price.startswith("R$") else None
             shipping_text = str(row.get("delivery") or "").strip()[:115]
-            installment_text = str(row.get("installment") or "").strip()[:115]
-            note = "Preço indexado pelo Google Shopping. Confira na loja."
-            if shipping_text:
-                note += " " + shipping_text + " (frete anunciado)."
-            if installment_text:
-                note += " " + installment_text + " (parcelamento anunciado)."
+            installment = row.get("installment")
+            installment_count = installment.get("period") if isinstance(installment, dict) else None
+            installment_value = None
+            if (type(installment_count) is int and 2 <= installment_count <= 48
+                    and str(installment.get("price", "")).startswith("R$")):
+                installment_value = cents(installment.get("extracted_price"))
+            freight = 0 if words(shipping_text) in ("frete gratis", "entrega gratis", "entrega gratuita") else None
+            note = "Preço indexado pelo Google Shopping. Confira o valor na loja."
             item_key = direct or str(row.get("product_id") or title)[:300]
             offer = make_offer(store, item_key, title, direct, price, old=previous,
-                               note=note, external=not bool(direct), provider="shopping")
+                               note=note, external=not bool(direct), provider="shopping",
+                               installments=installment_count if installment_value else None,
+                               installment_value=installment_value, shipping_text=shipping_text,
+                               shipping_estimate=freight)
             if not direct:
                 offer["url"] = google
             results.setdefault(item_key, offer)

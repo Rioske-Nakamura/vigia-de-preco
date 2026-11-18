@@ -9,7 +9,15 @@ Painel local para consultar e acompanhar ofertas do Mercado Livre. Requer Python
 3. Digite um produto ou cole o link HTTPS do anúncio e clique em **Buscar preços**.
 4. Use **Colocar em vigia** para acompanhar o produto. O intervalo inicial é de 60 minutos, ajustável em **Configurações**.
 
-O painel consulta o Mercado Livre sem chave de API. Se o navegador estiver conectado, o painel usa a extensão local. Sem a extensão, tenta a página pública diretamente. Se a página recusar a consulta automatizada ou mudar de formato, o painel mostra o motivo e o link para abrir a busca na loja. Como alternativa para uma busca pontual, abra a página na loja, salve com Ctrl+S como **Página da Web, somente HTML** e importe o arquivo no painel, diretamente na vigia ou nos resultados da busca. A importação lê os preços no seu computador. O servidor continua executando as vigias com o navegador fechado, enquanto o computador estiver ligado e conectado à internet.
+Você pode consultar o Mercado Livre via Google Shopping com SerpApi, pela extensão local ou pela página pública. Se a página recusar a consulta automatizada ou mudar de formato, o painel mostra o motivo e o link para abrir a busca na loja. Como alternativa para uma busca pontual, abra a página na loja, salve com Ctrl+S como **Página da Web, somente HTML** e importe o arquivo no painel, diretamente na vigia ou nos resultados da busca. A importação lê os preços no seu computador. O servidor continua executando as vigias com o navegador fechado, enquanto o computador estiver ligado e conectado à internet.
+
+## Busca pelo Google Shopping, sem abrir o navegador
+
+1. Obtenha uma chave no [painel da SerpApi](https://serpapi.com/dashboard).
+2. No Vigia, abra **Configurações → Busca sem navegador**, cole a chave e salve.
+3. Pesquise pelo nome do produto ou deixe as vigias ativas. O servidor usa esta fonte enquanto a chave estiver cadastrada. Mantenha o servidor rodando e conectado à internet.
+
+A SerpApi recebe os termos da consulta e retorna ofertas indexadas. O Vigia exibe só as do Mercado Livre. Cobertura, frequência de atualização e quantidade de consultas dependem do índice e do plano. Frete por CEP, Meli+ e cupons de checkout ficam sujeitos a conferência na loja. A chave fica em `config.local.json` no seu computador. Para voltar à consulta anterior, remova a chave nas configurações.
 
 ## Busca automática pelo Chrome ou Edge
 

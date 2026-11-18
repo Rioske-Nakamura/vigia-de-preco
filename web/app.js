@@ -40,7 +40,7 @@ let searchError = "";
 const expanded = new Set();
 
 async function api(action, data) {
-  if (action === "search" || action === "scan") {
+  if ((action === "search" || action === "scan") && !state?.shopping_enabled) {
     window.postMessage("vigia-consultar", location.origin);
     setTimeout(() => window.postMessage("vigia-consultar", location.origin), 350);
   }
@@ -152,7 +152,7 @@ function dashboard() {
     </div><div id="watch-list">${watchList()}</div>` : `<div class="card empty">
       <div class="examples">${EXAMPLES.map(([title, cat], i) => button("example", icon(ICONS[CATEGORIES.indexOf(cat)]) + `<span>${esc(title)}<small>${cat}</small></span>`, "example", `data-index="${i}"`)).join("")}</div>
     </div>`}
-    <div class="sourcebar">${shop("meli")} <span>Consulta à página pública</span></div>
+    <div class="sourcebar">${shop("meli")} <span>${state.shopping_enabled ? "Google Shopping · sem navegador" : "Consulta à página pública"}</span></div>
   </section>`;
 }
 
@@ -166,13 +166,14 @@ function searchPanel() {
     (a.cash.total ?? a.cash.base) - (b.cash.total ?? b.cash.base)
   ));
   const status = scans.meli;
-  const resultsText = status.state === "error" ? status.message : rows.length
-    ? `${rows.length} oferta(s) na página ${status.imported ? "salva do" : "do"} Mercado Livre.` : "Nenhuma oferta compatível nesta página.";
+  const resultsText = status.state === "error" ? status.message : status.method === "shopping"
+    ? (rows.length ? `${rows.length} oferta(s) do Mercado Livre no Google Shopping.` : "Nenhuma oferta do Mercado Livre encontrada no Google Shopping.")
+    : rows.length ? `${rows.length} oferta(s) na página ${status.imported ? "salva do" : "do"} Mercado Livre.` : "Nenhuma oferta compatível nesta página.";
   return `<section id="search-results" class="card search-results" aria-labelledby="results-title">
     <div class="section-head"><div><h2 id="results-title">${esc(query)}</h2><p>${esc(resultsText)}</p></div>
       ${button("watch-search","+ Colocar em vigia","primary")}</div>
     <div class="source-line">${shop("meli")} ${link(links.meli, "Abrir no Mercado Livre")}</div>
-    ${status.state === "error" && !state.browser_connected ? '<p class="hint"><a href="/guia#extensao">Ativar a busca automática pelo navegador ›</a></p>' : ""}
+    ${status.state === "error" && !state.shopping_enabled ? '<p class="hint"><a href="#ajustes">Configurar busca sem navegador ›</a></p>' : ""}
     ${status.state === "error" ? importControl() : ""}
     ${rows.length ? `<div class="table-box"><table class="table"><thead><tr><th>Oferta</th><th>À vista + frete</th><th>Parcelado + frete</th></tr></thead><tbody>
       ${rows.map(o => `<tr><td><div class="offer-name"><strong>${esc(o.title)}</strong></div>${shop(o.store)}
@@ -229,7 +230,7 @@ function watchRow(id, w) {
   ${w.stores.filter(s => s === "meli").map(s => {
     const log = state.scans[id]?.[s];
     const desc = !state.sources[s] ? "Consulta automática pausada nesta loja" : !log ? "Aguardando consulta" :
-      log.state === "ok" ? `${log.count} resultado(s) · ${stamp(log.time)}` : log.message + " · " + stamp(log.time);
+      log.state === "ok" ? `${log.count} resultado(s)${log.method === "shopping" ? " · Google Shopping" : ""} · ${stamp(log.time)}` : log.message + " · " + stamp(log.time);
     return `<div class="source-line">${shop(s)} ${link(w.links[s], "Abrir no Mercado Livre")} <span>${esc(desc)}</span></div>`;
   }).join("")}
   ${w.stores.includes("meli") ? importControl(id) : ""}
@@ -323,7 +324,7 @@ function alerts() {
       </div>${link(a.url,STORES[a.store])}</article>` :
       `<article class="card alert-row">${icon("↘","green")}
       <div class="info"><strong>${esc(a.name)} · ${cur(a.price)}</strong> ${a.read ? "" : badge("Novo","ok")} ${a.note ? badge("Provisório", "warn") : ""}
-      <p>${esc(a.title)} · ${a.mode === "cash" ? "À vista" : "Parcelado"}${a.target_scope === "product" ? " · sem frete" : ""} · ${stamp(a.time)}${a.note ? " · " + esc(a.note) : ""}</p></div>
+      <p>${esc(a.title)} · ${a.mode === "cash" ? "À vista" : "Parcelado"}${a.target_scope === "product" ? " · sem frete" : ""}${a.provider === "shopping" ? " · Google Shopping" : ""} · ${stamp(a.time)}${a.note ? " · " + esc(a.note) : ""}</p></div>
       ${link(a.url, a.external ? "Google Shopping" : STORES[a.store])}</article>`).join("")}</div>` :
       '<div class="card empty"><h3>Nenhum alerta ainda</h3><p>Defina um preço-alvo ou aguarde os cupons anunciados nos itens em vigia.</p></div>');
 }
@@ -339,7 +340,22 @@ function settings() {
       <div class="wide">${check("meli_plus","Tenho Meli+",s.meli_plus)}</div>
     </div><p class="form-error" role="alert"></p><div class="form-footer"><button class="primary">Salvar ajustes</button></div></form>
   </div>
-  <div class="form-section"><h2>Mercado Livre</h2>
+  <div class="form-section"><h2>Busca sem navegador</h2>
+    <div class="card form-card">
+      ${badge(state.shopping_enabled ? "Google Shopping configurado" : "Chave não cadastrada", state.shopping_enabled ? "ok" : "warn")}
+      <p class="hint">A SerpApi recebe o termo da busca e retorna preços indexados. O Vigia mantém só as ofertas do Mercado Livre.</p>
+      <form data-submit="shopping-config">
+        <div class="form-grid">
+          ${field("Chave da SerpApi","api_key","",{type:"password",wide:true,placeholder:state.shopping_enabled ? "Cole aqui para trocar a chave" : "Cole a chave da sua conta"})}
+          ${state.shopping_enabled ? `<div class="wide">${check("remove","Remover a chave e desativar a busca sem navegador",false)}</div>` : ""}
+        </div>
+        <p class="hint"><a href="https://serpapi.com/dashboard" target="_blank" rel="noopener noreferrer">Abrir painel da SerpApi ›</a></p>
+        <p class="form-error" role="alert"></p>
+        <div class="form-footer"><button class="primary">Salvar fonte</button></div>
+      </form>
+    </div>
+  </div>
+  <div class="form-section"><h2>Mercado Livre pelo navegador</h2>
     <span id="browser-connection">${browserStatus()}</span>
     <p class="hint" id="browser-last-result">${esc(browserLastResult())}</p>
     <p class="hint"><a href="/guia#extensao">Instalar a extensão para Chrome ou Edge ›</a></p>
@@ -544,6 +560,7 @@ document.addEventListener("submit", async e => {
   const data = new FormData(form);
   const body = Object.fromEntries(data);
   if (form.dataset.submit === "watch") body.stores = data.getAll("stores");
+  if (form.dataset.submit === "shopping-config") body.remove = data.has("remove");
   const submit = form.querySelector('button:not([type=button])');
   const errors = form.querySelector(".form-error");
   errors.textContent = "";

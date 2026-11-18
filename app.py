@@ -315,12 +315,15 @@ class App:
             self.evaluate_campaign(campanhas.campaign("meli", data), watch_id)
 
     def commit(self):
-        tmp = self.path.with_suffix(".tmp")
+        self.write_json(self.path, self.state)
+
+    def write_json(self, path, data):
+        tmp = path.with_suffix(path.suffix + ".tmp")
         with open(tmp, "w", encoding="utf-8", opener=lambda path, flags: os.open(path, flags, 0o600)) as f:
-            json.dump(self.state, f, ensure_ascii=False)
+            json.dump(data, f, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
-        tmp.replace(self.path)
+        tmp.replace(path)
 
     def active_offers(self, watch_id):
         state = self.state
@@ -350,7 +353,7 @@ class App:
                 amount, offer, note = min(candidates, key=lambda x: x[0])
                 state["alerts"].insert(0, dict(price=amount, name=watch["name"], title=offer["title"],
                     store=offer["store"], url=offer["url"], watch=watch_id, time=now(), mode=watch["mode"], external=offer.get("external", False),
-                    id=uuid4().hex, read=False, note=note, target_scope=watch.get("target_scope", "delivery")))
+                    id=uuid4().hex, read=False, note=note, provider=offer.get("provider"), target_scope=watch.get("target_scope", "delivery")))
                 del state["alerts"][200:]
             watch[flag] = bool(candidates)
 
@@ -388,17 +391,23 @@ class App:
             state["coupons_running"] = self.coupons_running
             state.pop("coupon_seen", None)
             state["running"] = self.running
+            state["shopping_enabled"] = bool(self.cfg.get("SERPAPI_KEY"))
             state["browser_connected"] = self.browser.connected()
             state["browser_diagnostics"] = self.browser.diagnostics()
             return state
 
     def query_store(self, store, watch, settings):
         try:
-            if store == "meli" and self.browser.connected():
+            if store == "meli" and self.cfg.get("SERPAPI_KEY"):
+                offers = self.providers.shopping(store, watch)
+                method = "shopping"
+            elif store == "meli" and self.browser.connected():
                 offers = self.query_browser(watch)
+                method = "browser"
             else:
                 offers = self.providers.scan(store, watch, settings)
-            return offers, dict(state="ok", count=len(offers), time=now())
+                method = "public"
+            return offers, dict(state="ok", count=len(offers), time=now(), method=method)
         except ProviderError as exc:
             return [], dict(state="error", message=str(exc), time=now(),
                             retry_after={503: 120, 429: 900}.get(exc.status))
@@ -624,6 +633,20 @@ class App:
         with self.lock:
             s = self.state
             wid = string(b, "id")
+            if action == "shopping-config":
+                remove = b.get("remove") is True
+                key = "" if remove else string(b, "api_key", 500)
+                if not remove and (not key or len(key) > 240 or any(c.isspace() for c in key)):
+                    raise ValueError("Insira uma chave da SerpApi válida.")
+                config = {**self.cfg, "SERPAPI_KEY": key}
+                self.write_json(self.config_path, config)
+                self.cfg["SERPAPI_KEY"] = key
+                for watch in s["watches"].values():
+                    watch["last_attempt"] = 0
+                    watch.pop("retry_at", None)
+                    watch["rev"] = uuid4().hex
+                self.commit()
+                return {"enabled": bool(key)}
             if action == "settings":
                 settings = configure(b)
                 if settings["cep"] != s["settings"]["cep"]:
