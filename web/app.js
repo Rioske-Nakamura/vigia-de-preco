@@ -19,6 +19,7 @@ const date = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "
 const cur = n => n == null ? "—" : brl.format(n / 100);
 const stamp = n => n ? date.format(new Date(n * 1000)) : "—";
 const duration = n => Number.isFinite(n) ? n.toLocaleString("pt-BR") + " s" : "";
+const scanSource = {shopping: "Índice do Google", manga_boom: "Mangá Boom"};
 const reais = n => n == null ? "" : (n / 100).toFixed(2).replace(".", ",");
 const esc = v => String(v ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 const safe = url => /^https:\/\//.test(url || "") ? esc(url) : "#";
@@ -167,7 +168,8 @@ function searchPanel() {
     (a.cash.total ?? a.cash.base) - (b.cash.total ?? b.cash.base)
   ));
   const status = scans.meli;
-  const resultsText = status.state === "error" ? status.message : status.method === "shopping"
+  const resultsText = status.state === "error" ? status.message : status.method === "manga_boom"
+    ? `${rows.length} oferta(s) do Mercado Livre encontrada(s) no Mangá Boom.` : status.method === "shopping"
     ? (rows.length ? `${rows.length} oferta(s) indexada(s) do Mercado Livre.` : (query.startsWith("https://") ? "O índice do Google não retornou preço para este anúncio específico." : "Nenhum preço do Mercado Livre encontrado no índice. Tente o nome e o volume, ou o link direto do anúncio."))
     : rows.length ? `${rows.length} oferta(s) na página ${status.imported ? "salva do" : "do"} Mercado Livre.` : "Nenhuma oferta compatível nesta página.";
   return `<section id="search-results" class="card search-results" aria-labelledby="results-title">
@@ -179,7 +181,8 @@ function searchPanel() {
     ${rows.length ? `<div class="table-box"><table class="table"><thead><tr><th>Oferta</th><th>À vista + frete</th><th>Parcelado + frete</th></tr></thead><tbody>
       ${rows.map(o => `<tr><td><div class="offer-name"><strong>${esc(o.title)}</strong></div>${shop(o.store)}
           ${o.old > o.price ? badge("De " + cur(o.old), "ok") : ""}<small>${esc(o.note)}</small>
-          ${link(o.url, o.external ? "Ver no Google Shopping" : "Abrir anúncio")}</td><td>${payCell(o,"cash")}</td><td>${payCell(o,"card")}</td></tr>`).join("")}
+          ${link(o.url, o.external ? "Ver no Google Shopping" : "Abrir anúncio")}
+          ${o.source_page ? link(o.source_page, "Ver fonte do preço") : ""}</td><td>${payCell(o,"cash")}</td><td>${payCell(o,"card")}</td></tr>`).join("")}
       </tbody></table></div>` : ""}
   </section>`;
 }
@@ -231,7 +234,7 @@ function watchRow(id, w) {
   ${w.stores.filter(s => s === "meli").map(s => {
     const log = state.scans[id]?.[s];
     const desc = !state.sources[s] ? "Consulta automática pausada nesta loja" : !log ? "Aguardando consulta" :
-      log.state === "ok" ? `${log.count} resultado(s)${log.method === "shopping" ? " · Índice do Google" : ""} · ${stamp(log.time)}` : log.message + " · " + stamp(log.time);
+      log.state === "ok" ? [`${log.count} resultado(s)`, scanSource[log.method], stamp(log.time)].filter(Boolean).join(" · ") : log.message + " · " + stamp(log.time);
     return `<div class="source-line">${shop(s)} ${link(w.links[s], "Abrir no Mercado Livre")} <span>${esc([desc, duration(log?.elapsed)].filter(Boolean).join(" · "))}</span></div>`;
   }).join("")}
   ${w.stores.includes("meli") ? importControl(id) : ""}
@@ -246,7 +249,7 @@ function watchRow(id, w) {
 function payCell(o, mode) {
   const p = o[mode];
   if (p.base == null) return "<span class='dim'>Não informado</span>";
-  const origin = mode === "cash" ? (p.advertised_coupon ? "Preço anunciado com cupom" : o.cash != null ? "À vista informado" : "Preço do anúncio") :
+  const origin = mode === "cash" ? (p.advertised_coupon ? "Preço anunciado com cupom" : p.price_unconfirmed ? "Preço a confirmar" : o.cash != null ? "À vista informado" : "Preço do anúncio") :
     o.installment_value != null ? `${o.installments}× de ${cur(o.installment_value)} antes de descontos` : `Total anunciado em ${o.installments}×`;
   const display = p.total != null ? cur(p.total) : p.estimated_total != null ? cur(p.estimated_total) : cur(p.subtotal) + " + frete";
   const shipping = p.estimated_total != null ? `<small>${badge("Estimativa", "warn")} ${p.shipping_estimate === 0 ? "Frete grátis anunciado" : "Frete anunciado " + cur(p.shipping_estimate)} · confirme no CEP</small>` :
@@ -264,7 +267,7 @@ function offerTable(id, offers) {
   </tr></thead><tbody>${offers.map(o => `<tr><td><div class="offer-name">${o.external ? esc(o.title) + "<br>" + link(o.url,"Ver no Google Shopping") : link(o.url,o.title)}</div>${shop(o.store)}
     ${active(id,o) && o.target_match.kind === "provisional" ? badge("Meta estimada", "warn") : ""}
     ${o.old > o.price ? badge("De " + cur(o.old), "ok") : ""}${o.seller ? `<small>Vendedor: ${esc(o.seller)}</small>` : ""}
-    ${o.note ? `<small>${esc(o.note)}</small>` : ""}
+    ${o.note ? `<small>${esc(o.note)}</small>` : ""}${o.source_page ? link(o.source_page, "Ver fonte do preço") : ""}
     </td><td>${payCell(o,"cash")}</td><td>${payCell(o,"card")}</td>
     <td><small>${esc(watchStatus(id,o))} · ${stamp(o.time)}</small>
     <div class="actions">${button("history","Histórico","secondary small",`data-id="${id}" data-key="${esc(o.id)}"`)}

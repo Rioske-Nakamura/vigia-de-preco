@@ -11,6 +11,10 @@ Painel local para consultar e acompanhar ofertas do Mercado Livre. Requer Python
 
 Você pode consultar o Mercado Livre via Google Shopping com SerpApi, pela extensão local ou pela página pública. Se a página recusar a consulta automatizada ou mudar de formato, o painel mostra o motivo e o link para abrir a busca na loja. Como alternativa para uma busca pontual, abra a página na loja, salve com Ctrl+S como **Página da Web, somente HTML** e importe o arquivo no painel, diretamente na vigia ou nos resultados da busca. A importação lê os preços no seu computador. O servidor continua executando as vigias com o navegador fechado, enquanto o computador estiver ligado e conectado à internet.
 
+## Busca de mangás por volume
+
+Para uma busca como **Mangá Konosuba volume 8**, o Vigia consulta primeiro a página pública do volume no Mangá Boom. Só exibe ofertas com link do Mercado Livre e mostra a fonte e o horário informado pelo comparador. O preço fica a confirmar na loja e só pode disparar um alerta estimado. Frete, parcelas e cupons ficam pendentes. Se o volume não estiver no comparador, o Vigia continua com suas outras fontes. Para acompanhar um vendedor específico, cole o link do anúncio do Mercado Livre.
+
 ## Busca pelo Google Shopping, sem abrir o navegador
 
 1. Obtenha uma chave no [painel da SerpApi](https://serpapi.com/dashboard).

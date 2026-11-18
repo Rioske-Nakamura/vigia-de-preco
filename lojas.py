@@ -206,6 +206,56 @@ class Providers:
     def enabled(self, store):
         return store == "meli"
 
+    def manga_boom(self, watch):
+        query = watch["query"]
+        book = book_query(query) if not query.startswith("https://") else None
+        if not book:
+            return []
+        terms, volume = book
+        page_url = f"https://mangaboom.com.br/serie/{'-'.join(terms)}/{volume}"
+        try:
+            html, final_url = request(page_url, headers={"Accept": "text/html"},
+                                      include_url=True, timeout=12, limit=1_500_000)
+        except ProviderError as exc:
+            if exc.status == 404:
+                return []
+            raise
+        if urllib.parse.urlsplit(final_url).netloc != "mangaboom.com.br":
+            return []
+        root = meli_publico.Page(html.decode("utf-8", errors="replace")).root
+        for node in root.walk():
+            if node.tag != "script" or node.attrs.get("type") != "application/ld+json":
+                continue
+            try:
+                book_data = json.loads("".join(node.parts()))
+            except ValueError:
+                continue
+            if not isinstance(book_data, dict) or book_data.get("@type") != "Book":
+                continue
+            title = book_data.get("name")
+            if not isinstance(title, str) or not shopping_matches(title, watch):
+                continue
+            offers = []
+            for item in root.walk():
+                if "vsl-item" not in item.classes:
+                    continue
+                link = item.find("vsl-link")
+                listing = store_link("meli", link.attrs.get("href")) if link else ""
+                direct = meli_publico.product_url(listing, "https://www.mercadolivre.com.br")
+                label = item.find("vsl-price")
+                value = meli_publico.amount(label)
+                if not direct or not value:
+                    continue
+                checked = item.find("vsl-time")
+                note = "Preço publicado pelo Mangá Boom"
+                if checked and checked.text():
+                    note += " · " + checked.text()[:75]
+                offers.append(make_offer("meli", direct, title, listing, value, provider="manga_boom",
+                                         price_unconfirmed=True, source_page=final_url,
+                                         note=note + ". Confira o valor na loja."))
+            return offers
+        return []
+
     def scan(self, store, watch, settings):
         if store != "meli":
             return []

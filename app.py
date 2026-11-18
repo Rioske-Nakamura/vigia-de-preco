@@ -167,7 +167,8 @@ def calc(offer, watch_id, mode, state):
     return dict(base=base, freight=freight, total=effective, subtotal=base-confirmed, discount=confirmed, codes=codes,
                 simulation=(base + freight - estimate if freight is not None else None) if estimate > confirmed else None,
                 sim_discount=estimate if estimate > confirmed else 0, sim_codes=sim_codes if estimate > confirmed else [],
-                advertised_coupon=advertised_coupon, shipping_estimate=shipping_estimate,
+                advertised_coupon=advertised_coupon, price_unconfirmed=offer.get("price_unconfirmed", False),
+                shipping_estimate=shipping_estimate,
                 estimated_total=None if shipping_estimate is None else base + shipping_estimate - confirmed)
 
 def target_match(payment, watch):
@@ -177,7 +178,7 @@ def target_match(payment, watch):
     if payment["base"] is None:
         return {"kind": "unknown", "amount": None, "note": ""}
     delivery = watch.get("target_scope", "delivery") != "product"
-    conditional = payment.get("advertised_coupon", False)
+    conditional = payment.get("advertised_coupon", False) or payment.get("price_unconfirmed", False)
     freight = payment["freight"] if delivery else 0
     estimate = payment.get("shipping_estimate") if delivery else None
     if freight is not None and not conditional:
@@ -190,8 +191,10 @@ def target_match(payment, watch):
     pending = []
     if freight is None:
         pending.append("frete")
-    if conditional:
+    if payment.get("advertised_coupon"):
         pending.append("cupom anunciado")
+    if payment.get("price_unconfirmed"):
+        pending.append("preço na loja")
     if payment["sim_codes"]:
         pending.append("cupom " + " + ".join(payment["sim_codes"]))
     if projected <= limit and pending:
@@ -398,8 +401,17 @@ class App:
 
     def query_store(self, store, watch, settings):
         started = time.monotonic()
+        comparison_failed = False
         try:
-            if store == "meli" and self.cfg.get("SERPAPI_KEY"):
+            offers = []
+            if store == "meli":
+                try:
+                    offers = self.providers.manga_boom(watch)
+                except ProviderError:
+                    comparison_failed = True
+            if offers:
+                method = "manga_boom"
+            elif store == "meli" and self.cfg.get("SERPAPI_KEY"):
                 offers, method = self.query_without_browser(watch, settings)
             elif store == "meli" and self.browser.connected():
                 offers = self.query_browser(watch)
@@ -410,7 +422,8 @@ class App:
             return offers, dict(state="ok", count=len(offers), time=now(), method=method,
                                 elapsed=round(time.monotonic() - started, 1))
         except ProviderError as exc:
-            return [], dict(state="error", message=str(exc), time=now(),
+            message = ("O Mangá Boom não respondeu. " if comparison_failed else "") + str(exc)
+            return [], dict(state="error", message=message, time=now(),
                             elapsed=round(time.monotonic() - started, 1),
                             retry_after={503: 120, 504: 120, 429: 900}.get(exc.status))
         except Exception as exc:
