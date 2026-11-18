@@ -2,7 +2,7 @@
 import json
 import re
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
 VOID_TAGS = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 MONEY = r"R\$\s*([0-9][0-9.]*,?[0-9]*)"
@@ -90,24 +90,65 @@ def amount(node):
     found = re.search(MONEY, node.text())
     return price(found[1]) if found else None
 
+PRODUCT_ID = re.compile(r"(?:^|[/\-])(MLB(?:U)?-?\d+)(?=$|[/\-])", re.I)
+ITEM_ID = re.compile(r"MLB-?\d+", re.I)
+
+
+def page_id(url):
+    ids = PRODUCT_ID.findall(urlsplit(url).path)
+    return ids[-1].upper().replace("-", "") if ids else ""
+
+
+def selected_item(url):
+    parts = urlsplit(url)
+    query, fragment = parse_qs(parts.query), parse_qs(parts.fragment)
+    filters = query.get("pdp_filters", [""])[0]
+    item_filter = re.search(r"(?:^|[|,;])item_id:(MLB-?\d+)(?=$|[|,;])", filters, re.I)
+    choices = [item_filter[1] if item_filter else "", query.get("item_id", [""])[0],
+               query.get("wid", [""])[0], fragment.get("item_id", [""])[0], fragment.get("wid", [""])[0]]
+    return next((item.upper().replace("-", "") for item in choices if ITEM_ID.fullmatch(item)), "")
+
+
+def listing_key(url):
+    return selected_item(url) or page_id(url)
+
+
+def same_listing(requested, candidate):
+    if not requested or not candidate:
+        return False
+    selected = selected_item(requested)
+    if selected:
+        observed = selected_item(candidate)
+        if observed:
+            return observed == selected
+        return page_id(candidate) == selected and urlsplit(candidate).hostname == "produto.mercadolivre.com.br"
+    wanted = page_id(requested)
+    observed = page_id(candidate)
+    return bool(wanted and (observed == wanted or selected_item(candidate) == wanted))
+
+
 def product_url(href, base):
+    if not href:
+        return ""
     try:
-        result = urlsplit(urljoin(base, href or ""))
+        result = urlsplit(urljoin(base, href))
         host = result.hostname or ""
         if (result.scheme == "https" and not result.username and not result.password
             and (host == "mercadolivre.com.br" or host.endswith(".mercadolivre.com.br"))
-            and re.search(r"(?:^|[/\-])MLB-?\d+(?:$|[/\-])", result.path, re.I)):
-            # Item/variation identifiers can select a different listing on the same catalog page.
-            query = "&".join(part for part in result.query.split("&") if part.split("=", 1)[0] in ("item_id", "variation", "attributes"))
-            fragment = result.fragment if result.fragment.startswith(("polycard_client=", "item_id=")) and "item_id=" in result.fragment else ""
-            if "item_id=" in fragment:
-                m = re.search(r"(?:^|&)item_id=(MLB\d+)(?:&|$)", fragment)
-                if m and not any(p.startswith("item_id=") for p in query.split("&")):
-                    query = "&".join(filter(None, (query, "item_id=" + m[1])))
-            return urlunsplit(("https", host, result.path, query, ""))
+            and PRODUCT_ID.search(result.path)):
+            params = parse_qs(result.query)
+            selected = selected_item(result.geturl())
+            query = {key: params[key][0] for key in ("variation", "attributes") if key in params}
+            if selected:
+                if "item_id" in params and ITEM_ID.fullmatch(params["item_id"][0]) and "pdp_filters" not in params:
+                    query["item_id"] = selected
+                else:
+                    query["pdp_filters"] = f"item_id:{selected}"
+            return urlunsplit(("https", host, result.path, urlencode(query), ""))
     except ValueError:
         pass
     return ""
+
 
 def row(node, page_url, detail=False):
     title = node.find("ui-pdp-title") if detail else node.find("poly-component__title", "ui-search-item__title", "ui-search-link")

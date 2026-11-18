@@ -8,7 +8,7 @@ function allowed(url) {
     if (p.protocol !== "https:" || p.username || p.password || p.port) return false;
     if (p.hostname === "lista.mercadolivre.com.br") return /^\/(?:[^/]+\/){0,3}[^/]+\/?$/.test(p.pathname);
     return ["www.mercadolivre.com.br", "produto.mercadolivre.com.br", "mercadolivre.com.br"].includes(p.hostname) &&
-      /(?:^|[/\-])MLB-?\d+(?:$|[/\-])/i.test(p.pathname);
+      /(?:^|[/\-])MLB(?:U)?-?\d+(?:$|[/\-])/i.test(p.pathname);
   } catch { return false; }
 }
 

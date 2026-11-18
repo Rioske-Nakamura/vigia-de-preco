@@ -167,7 +167,7 @@ function searchPanel() {
   ));
   const status = scans.meli;
   const resultsText = status.state === "error" ? status.message : status.method === "shopping"
-    ? (rows.length ? `${rows.length} oferta(s) indexada(s) do Mercado Livre.` : "Nenhum preço do Mercado Livre encontrado no índice. Tente o nome e o volume, ou o link direto do anúncio.")
+    ? (rows.length ? `${rows.length} oferta(s) indexada(s) do Mercado Livre.` : (query.startsWith("https://") ? "O índice do Google não retornou preço para este anúncio específico." : "Nenhum preço do Mercado Livre encontrado no índice. Tente o nome e o volume, ou o link direto do anúncio."))
     : rows.length ? `${rows.length} oferta(s) na página ${status.imported ? "salva do" : "do"} Mercado Livre.` : "Nenhuma oferta compatível nesta página.";
   return `<section id="search-results" class="card search-results" aria-labelledby="results-title">
     <div class="section-head"><div><h2 id="results-title">${esc(query)}</h2><p>${esc(resultsText)}</p></div>

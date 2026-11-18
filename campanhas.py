@@ -3,6 +3,7 @@ import re
 from datetime import datetime, time, timezone
 from urllib.parse import urlsplit
 
+from meli_publico import listing_key
 from lojas import ProviderError, STORES, cents, json_request, matches, request, store_link, words
 
 AWIN_ADVERTISER = 17729
@@ -91,9 +92,11 @@ def product_key(store, url):
     url = store_link(store, url)
     if not url:
         return ""
+    if store == "meli":
+        return listing_key(url).lower()
     parsed = urlsplit(url)
     path = parsed.path.rstrip("/")
-    patterns = {"meli": r"(?:^|[/\-])(MLB-?\d+)(?:[/\-]|$)", "amazon": r"/(?:dp|gp/product)/([a-z0-9]{10})(?:/|$)",
+    patterns = {"amazon": r"/(?:dp|gp/product)/([a-z0-9]{10})(?:/|$)",
                 "kabum": r"/produto/(\d+)(?:/|$)"}
     exact = re.search(patterns[store], path, re.I)
     return exact.group(1).lower().replace("-", "") if exact else ""

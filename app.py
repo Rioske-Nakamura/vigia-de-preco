@@ -447,7 +447,7 @@ class App:
         detail = not url.startswith("https://lista.mercadolivre.com.br/")
         if detail:
             source_url = meli_publico.product_url(result.get("url"), url) if result.get("url") else ""
-            if not source_url or campanhas.product_key("meli", source_url) != campanhas.product_key("meli", url):
+            if not meli_publico.same_listing(url, source_url):
                 raise ProviderError("O Mercado Livre redirecionou para outro anúncio. Confira o link da vigia.")
         return self.providers.parse_meli(result["html"], url, detail)
 
@@ -525,7 +525,7 @@ class App:
                     canonical = next((n.attrs.get("href") for n in meli_publico.Page(html).root.walk()
                         if n.tag == "link" and n.attrs.get("rel") == "canonical"), None)
                     page_link = meli_publico.product_url(canonical, link) if canonical else ""
-                    if not page_link or campanhas.product_key("meli", page_link) != campanhas.product_key("meli", link):
+                    if not meli_publico.same_listing(link, page_link):
                         raise ValueError("O arquivo não identifica o mesmo anúncio da busca. Salve a página do anúncio correto.")
                 try:
                     rows = self.providers.parse_meli(html, link, detail)

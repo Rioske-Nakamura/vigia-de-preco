@@ -272,16 +272,15 @@ class Providers:
             raise ProviderError("Cadastre a chave da SerpApi em Configurações.")
         search_watch = watch
         exact = None
+        listing = None
         if query.startswith("https://"):
             listing = meli_publico.product_url(query, "https://www.mercadolivre.com.br")
             if not listing:
                 raise ProviderError("Pesquise pelo nome do produto ou informe um link de anúncio do Mercado Livre.")
             url_parts = urllib.parse.urlsplit(listing)
-            ids = re.findall(r"(?<![A-Za-z0-9])MLB-?\d+\b", url_parts.path, re.I)
-            item_id = urllib.parse.parse_qs(url_parts.query).get("item_id", [None])[0]
-            exact = (item_id if item_id and re.fullmatch(r"MLB-?\d+", item_id, re.I) else ids[-1]).upper().replace("-", "")
+            exact = meli_publico.listing_key(listing)
             slug = [p for p in url_parts.path.strip("/").split("/") if p not in ("p", "up")]
-            seed = re.sub(r"^MLB-?\d+-?", "", slug[0], flags=re.I).replace("-", " ").strip()
+            seed = re.sub(r"^MLB(?:U)?-?\d+-?", "", slug[0], flags=re.I).replace("-", " ").strip()
             query = seed or exact
             search_watch = dict(watch, query=query)
         first_query = f"{query} Mercado Livre"
@@ -297,7 +296,7 @@ class Providers:
             attempts.extend([("google_shopping", short), ("google", web_query)])
         offers = {}
         for engine, term in attempts:
-            if len(offers) >= 2:
+            if len(offers) >= (1 if listing else 2):
                 break
             try:
                 rows = self.indexed_rows(engine, term, api_key)
@@ -305,7 +304,7 @@ class Providers:
                 if not offers:
                     raise
                 break
-            for identity, offer in self.shopping_offers(store, rows, search_watch, exact, query).items():
+            for identity, offer in self.shopping_offers(store, rows, search_watch, listing, query).items():
                 offers.setdefault(identity, offer)
         return list(offers.values())[:15]
 
@@ -336,13 +335,13 @@ class Providers:
             self.shopping_cache[key] = (time.monotonic() + 300, rows)
             return rows
 
-    def shopping_offers(self, store, rows, watch, exact, query):
+    def shopping_offers(self, store, rows, watch, listing, query):
         results = {}
         for row in rows:
             if not isinstance(row, dict):
                 continue
             title = row.get("title") or ""
-            if not isinstance(title, str) or not title or (exact is None and not shopping_matches(title, watch)) or row.get("second_hand_condition"):
+            if not isinstance(title, str) or not title or (listing is None and not shopping_matches(title, watch)) or row.get("second_hand_condition"):
                 continue
             price_text = str(row.get("price", ""))
             if not re.match(r"^R\$\s*[\d.,]+\s*$", price_text):
@@ -353,12 +352,8 @@ class Providers:
             raw_link = row.get("direct_link") or row.get("link") or row.get("product_link") or ""
             direct = (meli_publico.product_url(raw_link, "https://www.mercadolivre.com.br")
                       if store == "meli" and store_link(store, raw_link) else store_link(store, raw_link))
-            if exact:
-                if not direct:
-                    continue
-                direct_ids = {m.upper().replace("-", "") for m in re.findall(r"(?<![A-Za-z0-9])MLB-?\d+\b", direct, re.I)}
-                if exact not in direct_ids:
-                    continue
+            if listing and not meli_publico.same_listing(listing, direct):
+                continue
             named = {
                 "meli": ("mercado livre", "mercadolivre", "mercado livre com br", "mercadolivre com br"),
                 "amazon": ("amazon", "amazon com br", "amazon brasil"),
@@ -386,10 +381,7 @@ class Providers:
             note = f"Preço indexado pela fonte {source}. Confira o valor na loja."
             item_key = direct or str(row.get("product_id") or title)[:300]
             if store == "meli" and direct:
-                parsed = urllib.parse.urlsplit(direct)
-                chosen = urllib.parse.parse_qs(parsed.query).get("item_id", [""])[0]
-                ids = re.findall(r"(?<![A-Za-z0-9])MLB-?\d+\b", parsed.path, re.I)
-                item_key = (chosen if re.fullmatch(r"MLB-?\d+", chosen, re.I) else ids[-1]).upper().replace("-", "")
+                item_key = meli_publico.listing_key(direct)
             offer = make_offer(store, direct or item_key, title, direct, price, old=previous,
                                note=note, external=not bool(direct), provider="shopping", indexed_source=source,
                                installments=installment_count if installment_value else None,
