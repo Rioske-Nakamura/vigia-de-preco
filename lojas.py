@@ -137,11 +137,13 @@ def cents(value):
     except (ValueError, TypeError, OverflowError):
         return None
 
-def request(url, *, headers=None, data=None, limit=8_000_000):
+def request(url, *, headers=None, data=None, limit=8_000_000, include_url=False):
     req = urllib.request.Request(url, headers={"User-Agent": "VigiaPrecoLocal/1.0", **(headers or {})}, data=data)
     try:
         with urllib.request.urlopen(req, timeout=15) as result:
             raw = result.read(limit + 1)
+            if include_url:
+                final_url = result.geturl()
         if len(raw) > limit:
             raise ProviderError("Resposta acima do limite da fonte.")
         if raw.startswith(b"\x1f\x8b"):
@@ -149,7 +151,7 @@ def request(url, *, headers=None, data=None, limit=8_000_000):
                 raw = z.read(limit + 1)
             if len(raw) > limit:
                 raise ProviderError("Arquivo descompactado acima do limite da fonte.")
-        return raw
+        return (raw, final_url) if include_url else raw
     except urllib.error.HTTPError as e:
         raise ProviderError({401: "Credencial inválida ou expirada.", 403: "A fonte recusou o acesso.",
                              429: "Limite de consultas da fonte atingido."}.get(e.code, f"Resposta HTTP {e.code} da fonte."), status=e.code) from None
@@ -213,16 +215,26 @@ class Providers:
             rows = cached[1]
         else:
             if now < self.public_retry_at:
-                raise ProviderError("O Mercado Livre recusou consultas automáticas deste computador. Abra a busca na loja ou tente mais tarde.")
+                raise ProviderError("A consulta direta está em pausa após uma recusa do Mercado Livre.", status=403)
             try:
-                html = request(url, headers={"Accept": "text/html", "Accept-Language": "pt-BR,pt;q=0.9"})
+                html, final_url = request(url, headers={"Accept": "text/html", "Accept-Language": "pt-BR,pt;q=0.9"},
+                                          include_url=True)
             except ProviderError as exc:
                 if exc.status in (403, 429):
                     self.public_retry_at = now + 900
-                    raise ProviderError("O Mercado Livre recusou a consulta direta. Abra a busca na loja ou tente mais tarde.") from None
+                    raise ProviderError(f"O Mercado Livre recusou a consulta direta (HTTP {exc.status}).",
+                                        status=exc.status) from None
                 raise
+            html = html.decode("utf-8", errors="replace")
+            if detail:
+                source_url = meli_publico.product_url(final_url, url)
+                if not meli_publico.same_listing(url, source_url):
+                    if meli_publico.verification_page(html):
+                        self.public_retry_at = now + 900
+                        raise ProviderError("O Mercado Livre apresentou uma tela de verificação.", status=403)
+                    raise ProviderError("A página aberta não confirmou o anúncio do link.")
             try:
-                rows = self.parse_meli(html.decode("utf-8", errors="replace"), url, detail)
+                rows = self.parse_meli(html, url, detail)
             except ProviderError as exc:
                 if exc.status == 403:
                     self.public_retry_at = now + 900
@@ -236,8 +248,8 @@ class Providers:
         rows = meli_publico.parse(html, url, detail)
         if rows is None:
             if meli_publico.verification_page(html):
-                raise ProviderError("O Mercado Livre mostrou uma tela de verificação. Abra a busca no navegador.", status=403)
-            raise ProviderError("A página veio sem ofertas legíveis. Abra a busca no navegador e importe a página de resultados.")
+                raise ProviderError("O Mercado Livre mostrou uma tela de verificação.", status=403)
+            raise ProviderError("A página do Mercado Livre veio sem preços legíveis.")
         return rows
 
     def meli_offers(self, rows, watch, detail, imported=False):

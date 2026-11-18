@@ -15,7 +15,9 @@ Você pode consultar o Mercado Livre via Google Shopping com SerpApi, pela exten
 
 1. Obtenha uma chave no [painel da SerpApi](https://serpapi.com/dashboard).
 2. No Vigia, abra **Configurações → Busca sem navegador**, cole a chave e salve.
-3. Pesquise pelo nome do produto ou deixe as vigias ativas. O servidor usa esta fonte enquanto a chave estiver cadastrada. Mantenha o servidor rodando e conectado à internet.
+3. Pesquise pelo nome do produto ou deixe as vigias ativas. Mantenha o servidor rodando e conectado à internet.
+
+Ao colar o link de um anúncio, o Vigia consulta primeiro a página pública. Se a leitura falhar, procura no índice pelo mesmo anúncio. Na busca por nome, o Vigia consulta o índice primeiro e tenta a busca pública da loja se faltar um resultado. O painel informa quando a loja recusa o acesso e o índice não tem preço.
 
 A SerpApi recebe os termos e retorna ofertas indexadas. Se houver poucas ofertas, o Vigia tenta outra busca no Shopping e consulta a busca comum do Google, totalizando até três consultas. Só usa o preço de um resultado comum quando o Google fornece um valor explícito em reais no próprio resultado do anúncio. O Vigia exibe só as do Mercado Livre. Cobertura, frequência de atualização e quantidade de consultas dependem do índice e do plano. Frete por CEP, Meli+ e cupons de checkout ficam sujeitos a conferência na loja. A chave fica em `config.local.json` no seu computador. Para voltar à consulta anterior, remova a chave nas configurações.
 

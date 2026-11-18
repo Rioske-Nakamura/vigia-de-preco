@@ -399,8 +399,7 @@ class App:
     def query_store(self, store, watch, settings):
         try:
             if store == "meli" and self.cfg.get("SERPAPI_KEY"):
-                offers = self.providers.shopping(store, watch)
-                method = "shopping"
+                offers, method = self.query_without_browser(watch, settings)
             elif store == "meli" and self.browser.connected():
                 offers = self.query_browser(watch)
                 method = "browser"
@@ -413,6 +412,30 @@ class App:
                             retry_after={503: 120, 429: 900}.get(exc.status))
         except Exception as exc:
             return [], dict(state="error", message="Formato inesperado da fonte (" + type(exc).__name__ + ").", time=now())
+
+    def query_without_browser(self, watch, settings):
+        url = url_for("meli", watch["query"])
+        exact_link = not url.startswith("https://lista.mercadolivre.com.br/")
+        public = ("public", lambda: self.providers.scan("meli", watch, settings))
+        indexed = ("shopping", lambda: self.providers.shopping("meli", watch))
+        sources = (public, indexed) if exact_link else (indexed, public)
+        failures = []
+        indexed_empty = False
+        retry_status = None
+        for method, query in sources:
+            try:
+                offers = query()
+            except ProviderError as exc:
+                failures.append(str(exc))
+                if exc.status == 429:
+                    retry_status = 429
+                continue
+            if offers or (method == "public" and (exact_link or indexed_empty)):
+                return offers, method
+            indexed_empty = method == "shopping"
+        if indexed_empty:
+            failures.append("O Google não retornou um preço para " + ("esse anúncio." if exact_link else "essa busca."))
+        raise ProviderError(" ".join(failures), status=retry_status)
 
     def query_browser(self, watch):
         url = url_for("meli", watch["query"])
