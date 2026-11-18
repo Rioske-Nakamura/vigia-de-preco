@@ -34,17 +34,18 @@ class BrowserBridge:
                     for key, job in self.jobs.items():
                         if not job["claimed"]:
                             job["claimed"] = True
+                            self.condition.notify_all()
                             return {"id": key, "url": job["url"]}
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return None
                 self.condition.wait(remaining)
 
-    def claimed_url(self, key):
+    def claimed_query(self, key):
         with self.condition:
             job = self.jobs.get(key)
             if job and job["claimed"] and job["answer"] is None:
-                return job["url"]
+                return job["url"], job["watch"]
             return None
 
     def complete(self, key, result):
@@ -59,17 +60,18 @@ class BrowserBridge:
             self.condition.notify_all()
             return True
 
-    def query(self, url):
+    def query(self, url, watch):
         with self.condition:
             if self.pause_until > time.monotonic():
                 return {"status": "verification"}
             if len(self.jobs) >= 4:
                 return {"status": "busy"}
             key = uuid4().hex
-            job = self.jobs[key] = {"url": url, "claimed": False, "answer": None}
+            job = self.jobs[key] = {"url": url, "watch": watch, "claimed": False, "answer": None}
             self.condition.notify_all()
             try:
-                self.condition.wait_for(lambda: job["answer"] is not None, timeout=100)
+                if self.condition.wait_for(lambda: job["claimed"], timeout=165):
+                    self.condition.wait_for(lambda: job["answer"] is not None, timeout=95)
                 if job["answer"] is not None:
                     return job["answer"]
                 stage = "response" if job["claimed"] else "waiting"

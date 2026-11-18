@@ -137,10 +137,10 @@ def cents(value):
     except (ValueError, TypeError, OverflowError):
         return None
 
-def request(url, *, headers=None, data=None, limit=8_000_000, include_url=False):
+def request(url, *, headers=None, data=None, limit=8_000_000, include_url=False, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": "VigiaPrecoLocal/1.0", **(headers or {})}, data=data)
     try:
-        with urllib.request.urlopen(req, timeout=15) as result:
+        with urllib.request.urlopen(req, timeout=timeout) as result:
             raw = result.read(limit + 1)
             if include_url:
                 final_url = result.geturl()
@@ -155,6 +155,12 @@ def request(url, *, headers=None, data=None, limit=8_000_000, include_url=False)
     except urllib.error.HTTPError as e:
         raise ProviderError({401: "Credencial inválida ou expirada.", 403: "A fonte recusou o acesso.",
                              429: "Limite de consultas da fonte atingido."}.get(e.code, f"Resposta HTTP {e.code} da fonte."), status=e.code) from None
+    except TimeoutError:
+        raise ProviderError("A fonte demorou mais que o limite da consulta.", status=504) from None
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise ProviderError("A fonte demorou mais que o limite da consulta.", status=504) from None
+        raise ProviderError("Falha de conexão com a fonte.") from None
     except (OSError, ValueError):
         raise ProviderError("Falha de conexão ou formato da resposta.") from None
 
@@ -238,7 +244,7 @@ class Providers:
                 raise ProviderError("A consulta direta está em pausa após uma recusa do Mercado Livre.", status=403)
             try:
                 html, final_url = request(url, headers={"Accept": "text/html", "Accept-Language": "pt-BR,pt;q=0.9"},
-                                          include_url=True)
+                                          include_url=True, timeout=25)
             except ProviderError as exc:
                 if exc.status in (403, 429):
                     self.public_retry_at = now + 900
@@ -360,12 +366,18 @@ class Providers:
                 return old[1]
             url = query_url("https://serpapi.com/search.json", engine=engine, q=query, gl="br",
                             hl="pt", google_domain="google.com.br", api_key=api_key)
-            try:
-                data = json_request(url)
-            except ProviderError as exc:
-                hints = {401:"Chave da SerpApi inválida. Confira em Configurações.",
-                         403:"A SerpApi recusou a chave. Confira sua conta.", 429:"A SerpApi atingiu o limite de consultas."}
-                raise ProviderError(hints.get(exc.status, "A SerpApi não respondeu à consulta."), status=exc.status) from None
+            for attempt in range(2):
+                try:
+                    data = json_request(url, timeout=30)
+                    break
+                except ProviderError as exc:
+                    if attempt == 0 and exc.status in (500, 502, 503, 504):
+                        continue
+                    hints = {401:"Chave da SerpApi inválida. Confira em Configurações.",
+                             403:"A SerpApi recusou a chave. Confira sua conta.",
+                             429:"A SerpApi atingiu o limite de consultas.",
+                             504:"A SerpApi excedeu o tempo de resposta nas duas tentativas."}
+                    raise ProviderError(hints.get(exc.status, "A SerpApi não respondeu à consulta."), status=exc.status) from None
             error = data.get("error")
             if error and "hasn't returned any results" not in str(error).casefold():
                 raise ProviderError("A SerpApi retornou um erro. Verifique a chave ou a cota.")

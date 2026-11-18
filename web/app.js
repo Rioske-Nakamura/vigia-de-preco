@@ -18,6 +18,7 @@ const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" 
 const date = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 const cur = n => n == null ? "—" : brl.format(n / 100);
 const stamp = n => n ? date.format(new Date(n * 1000)) : "—";
+const duration = n => Number.isFinite(n) ? n.toLocaleString("pt-BR") + " s" : "";
 const reais = n => n == null ? "" : (n / 100).toFixed(2).replace(".", ",");
 const esc = v => String(v ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 const safe = url => /^https:\/\//.test(url || "") ? esc(url) : "#";
@@ -152,7 +153,7 @@ function dashboard() {
     </div><div id="watch-list">${watchList()}</div>` : `<div class="card empty">
       <div class="examples">${EXAMPLES.map(([title, cat], i) => button("example", icon(ICONS[CATEGORIES.indexOf(cat)]) + `<span>${esc(title)}<small>${cat}</small></span>`, "example", `data-index="${i}"`)).join("")}</div>
     </div>`}
-    <div class="sourcebar">${shop("meli")} <span>${state.shopping_enabled ? "Índice do Google · sem navegador" : "Consulta à página pública"}</span></div>
+    <div class="sourcebar">${shop("meli")} <span>${state.shopping_enabled ? "Busca sem navegador" : state.browser_connected ? "Consulta pela extensão" : "Consulta à página pública"}</span></div>
   </section>`;
 }
 
@@ -170,7 +171,7 @@ function searchPanel() {
     ? (rows.length ? `${rows.length} oferta(s) indexada(s) do Mercado Livre.` : (query.startsWith("https://") ? "O índice do Google não retornou preço para este anúncio específico." : "Nenhum preço do Mercado Livre encontrado no índice. Tente o nome e o volume, ou o link direto do anúncio."))
     : rows.length ? `${rows.length} oferta(s) na página ${status.imported ? "salva do" : "do"} Mercado Livre.` : "Nenhuma oferta compatível nesta página.";
   return `<section id="search-results" class="card search-results" aria-labelledby="results-title">
-    <div class="section-head"><div><h2 id="results-title">${esc(query)}</h2><p>${esc(resultsText)}</p></div>
+    <div class="section-head"><div><h2 id="results-title">${esc(query)}</h2><p>${esc([resultsText, duration(status.elapsed)].filter(Boolean).join(" · "))}</p></div>
       ${button("watch-search","+ Colocar em vigia","primary")}</div>
     <div class="source-line">${shop("meli")} ${link(links.meli, "Abrir no Mercado Livre")}</div>
     ${status.state === "error" && !state.shopping_enabled ? '<p class="hint"><a href="#ajustes">Configurar busca sem navegador ›</a></p>' : ""}
@@ -231,7 +232,7 @@ function watchRow(id, w) {
     const log = state.scans[id]?.[s];
     const desc = !state.sources[s] ? "Consulta automática pausada nesta loja" : !log ? "Aguardando consulta" :
       log.state === "ok" ? `${log.count} resultado(s)${log.method === "shopping" ? " · Índice do Google" : ""} · ${stamp(log.time)}` : log.message + " · " + stamp(log.time);
-    return `<div class="source-line">${shop(s)} ${link(w.links[s], "Abrir no Mercado Livre")} <span>${esc(desc)}</span></div>`;
+    return `<div class="source-line">${shop(s)} ${link(w.links[s], "Abrir no Mercado Livre")} <span>${esc([desc, duration(log?.elapsed)].filter(Boolean).join(" · "))}</span></div>`;
   }).join("")}
   ${w.stores.includes("meli") ? importControl(id) : ""}
   <h3>Comparação de ofertas</h3>

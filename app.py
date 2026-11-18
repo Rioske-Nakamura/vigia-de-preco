@@ -397,6 +397,7 @@ class App:
             return state
 
     def query_store(self, store, watch, settings):
+        started = time.monotonic()
         try:
             if store == "meli" and self.cfg.get("SERPAPI_KEY"):
                 offers, method = self.query_without_browser(watch, settings)
@@ -406,12 +407,15 @@ class App:
             else:
                 offers = self.providers.scan(store, watch, settings)
                 method = "public"
-            return offers, dict(state="ok", count=len(offers), time=now(), method=method)
+            return offers, dict(state="ok", count=len(offers), time=now(), method=method,
+                                elapsed=round(time.monotonic() - started, 1))
         except ProviderError as exc:
             return [], dict(state="error", message=str(exc), time=now(),
-                            retry_after={503: 120, 429: 900}.get(exc.status))
+                            elapsed=round(time.monotonic() - started, 1),
+                            retry_after={503: 120, 504: 120, 429: 900}.get(exc.status))
         except Exception as exc:
-            return [], dict(state="error", message="Formato inesperado da fonte (" + type(exc).__name__ + ").", time=now())
+            return [], dict(state="error", message="Formato inesperado da fonte (" + type(exc).__name__ + ").",
+                            time=now(), elapsed=round(time.monotonic() - started, 1))
 
     def query_without_browser(self, watch, settings):
         url = url_for("meli", watch["query"])
@@ -427,8 +431,8 @@ class App:
                 offers = query()
             except ProviderError as exc:
                 failures.append(str(exc))
-                if exc.status == 429:
-                    retry_status = 429
+                if retry_status is None or exc.status == 429 or (exc.status in (503, 504) and retry_status != 429):
+                    retry_status = exc.status
                 continue
             if offers or (method == "public" and (exact_link or indexed_empty)):
                 return offers, method
@@ -439,7 +443,7 @@ class App:
 
     def query_browser(self, watch):
         url = url_for("meli", watch["query"])
-        result = self.browser.query(url)
+        result = self.browser.query(url, watch)
         status = result["status"]
         if status == "verification":
             raise ProviderError("O Mercado Livre apresentou uma verificação de acesso. A vigia pelo navegador foi pausada por 15 minutos.", status=429)
@@ -447,7 +451,7 @@ class App:
             messages = {"busy": "Há consultas em andamento. Tente novamente.",
                         "timeout": "O navegador não respondeu a tempo. Confira se a extensão e o navegador estão abertos.",
                         "empty": "O navegador abriu a página, mas o Mercado Livre não exibiu ofertas legíveis.",
-                        "unreadable": "O Mercado Livre carregou a página, mas o Vigia não conseguiu ler os anúncios exibidos.",
+                        "unreadable": "A página carregou, mas a extensão não encontrou um preço legível para o produto buscado.",
                         "error": "A extensão não conseguiu abrir a página do Mercado Livre."}
             stage = result.get("stage")
             message = messages[status]
@@ -499,9 +503,10 @@ class App:
             result.update(html=html, url=string(body, "url", 2500))
         job_id = string(body, "id")
         if status == "ok" and body.get("candidate") is True:
-            url = self.browser.claimed_url(job_id)
-            if url is None:
+            claimed = self.browser.claimed_query(job_id)
+            if claimed is None:
                 return {"accepted": False, "continue": False}
+            url, watch = claimed
             try:
                 rows = self.browser_rows(url, result)
             except ProviderError as exc:
@@ -510,6 +515,8 @@ class App:
                     return {"accepted": True, "status": "verification"}
                 return {"accepted": False, "continue": True}
             if not rows and body.get("settled_empty") is not True:
+                return {"accepted": False, "continue": True}
+            if rows and not self.providers.meli_offers(rows, watch, not url.startswith("https://lista.mercadolivre.com.br/")):
                 return {"accepted": False, "continue": True}
             accepted = self.browser.complete(job_id, {"status": status, "stage": stage, "rows": rows})
             return {"accepted": accepted, "continue": False}

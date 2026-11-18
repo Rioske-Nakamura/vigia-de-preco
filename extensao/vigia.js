@@ -46,7 +46,8 @@ function capture() {
   const priced = nodes.some(node => {
     if (node.matches(".ui-search-no-results")) return true;
     const price = node.matches(priceSelector) ? node : node.querySelector(priceSelector);
-    return price && (price.querySelector(".andes-money-amount__fraction, [aria-label*='reais']") ||
+    return price && (price.matches("[aria-label*='reais']") ||
+      price.querySelector(".andes-money-amount__fraction, [aria-label*='reais']") ||
       /R\$\s*\d/.test(price.textContent));
   });
   if (!priced) {
@@ -115,10 +116,11 @@ async function navigate(job) {
     tab = await chrome.tabs.create({url, active:false});
     await chrome.tabs.update(tab.id, {autoDiscardable:false}).catch(() => {});
     stage = "background";
-    let emptyFrames = 0;
+    const started = performance.now();
+    let emptySince = null;
     let rejected = false;
     let lastCandidate;
-    for (let attempt = 0; attempt < 52; attempt++) {
+    while (performance.now() - started < 75000) {
       const current = await chrome.tabs.get(tab.id);
       if (current.url && current.url !== "about:blank") {
         const host = new URL(current.url).hostname;
@@ -130,8 +132,9 @@ async function navigate(job) {
         const data = result[0]?.result;
         if (data?.status === "verification") return {...data, stage};
         if (data?.status === "ok") {
-          emptyFrames = data.noResults && data.complete && data.visible ? emptyFrames + 1 : 0;
-          const settled = emptyFrames >= 4;
+          const visibleEmpty = data.noResults && data.complete && data.visible;
+          emptySince = visibleEmpty ? (emptySince ?? performance.now()) : null;
+          const settled = emptySince !== null && performance.now() - emptySince >= 22000;
           const changed = lastCandidate?.html !== data.html || lastCandidate?.url !== data.url || lastCandidate?.settled !== settled;
           if ((!data.noResults || settled) && changed) {
             lastCandidate = {html:data.html, url:data.url, settled};
@@ -143,10 +146,10 @@ async function navigate(job) {
             rejected = true;
           }
         } else {
-          emptyFrames = 0;
+          emptySince = null;
         }
       }
-      if (attempt === 6) {
+      if (!workWindow && performance.now() - started >= 6000) {
         workWindow = await chrome.windows.create({tabId:tab.id, focused:true, type:"normal"});
         if (workWindow?.id == null) return {status:"error", stage:"focus"};
         stage = "foreground";
