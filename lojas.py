@@ -59,7 +59,7 @@ def matches(title, watch):
                         for term in watch.get("exclude", "").split(",") if words(term)))
 
 def book_query(query):
-    normalized = words(query)
+    normalized = words(re.sub(r"\s*\((?:portugu[eê]s|pt-br)\)\s*$", "", query, flags=re.I))
     volume = re.search(r"\b(?:vol(?:ume)?|edicao)\s+(\d+)\b", normalized)
     if not volume and re.search(r"\b(?:manga|livro|hq)\b", normalized):
         volume = re.search(r"\b(\d+)$", normalized)
@@ -209,6 +209,26 @@ class Providers:
     def meli_public(self, watch):
         url = url_for("meli", watch["query"])
         detail = not url.startswith("https://lista.mercadolivre.com.br/")
+        urls = [url]
+        book = book_query(watch["query"]) if not detail else None
+        if book:
+            terms, _ = book
+            broad = url_for("meli", " ".join([*terms, "manga"]))
+            if broad != url:
+                urls.append(broad)
+        for candidate in urls:
+            try:
+                rows = self.meli_public_rows(candidate, detail)
+            except ProviderError as exc:
+                if exc.status in (403, 429) or candidate == urls[-1]:
+                    raise
+                continue
+            offers = self.meli_offers(rows, watch, detail)
+            if offers:
+                return offers
+        return []
+
+    def meli_public_rows(self, url, detail):
         now = time.monotonic()
         cached = self.public_cache.get(url)
         if cached and cached[0] > now:
@@ -242,7 +262,7 @@ class Providers:
             if len(self.public_cache) >= 60:
                 self.public_cache.pop(next(iter(self.public_cache)))
             self.public_cache[url] = (now + 180, rows)
-        return self.meli_offers(rows, watch, detail)
+        return rows
 
     def parse_meli(self, html, url, detail):
         rows = meli_publico.parse(html, url, detail)
@@ -255,7 +275,7 @@ class Providers:
     def meli_offers(self, rows, watch, detail, imported=False):
         offers = {}
         for row in rows:
-            if not detail and not matches(row["title"], watch):
+            if not detail and not shopping_matches(row["title"], watch):
                 continue
             fields = {k: v for k, v in row.items() if k not in ("title", "url", "price")}
             shipping_text = row.get("shipping_text", "")
@@ -302,12 +322,24 @@ class Providers:
             short = " ".join(terms) + f" volume {volume}"
         else:
             short = query
-        web_query = f"site:mercadolivre.com.br {short}" + (f" {exact}" if exact else "")
-        attempts = [("google_shopping", first_query)]
-        if store == "meli":
-            attempts.extend([("google_shopping", short), ("google", web_query)])
+        domain_filter = "site:mercadolivre.com.br"
+        if listing:
+            alternate = re.sub(r"^(MLBU?)(\d+)$", r"\1-\2", exact)
+            ids = " OR ".join(f'"{code}"' for code in dict.fromkeys((exact, alternate)))
+            attempts = [
+                ("google", f"{domain_filter} ({ids})"),
+                ("google_shopping", first_query),
+                ("google", f"{domain_filter} {short}"),
+                ("google_shopping", short),
+            ]
+        else:
+            attempts = [("google_shopping", first_query), ("google_shopping", short),
+                        ("google", f"{domain_filter} {short}")]
+            if book:
+                edition = f"({volume} OR {volume:02d})" if volume < 10 else str(volume)
+                attempts.append(("google", f"{domain_filter} {' '.join(terms)} mangá {edition}"))
         offers = {}
-        for engine, term in attempts:
+        for engine, term in dict.fromkeys(attempts):
             if len(offers) >= (1 if listing else 2):
                 break
             try:
