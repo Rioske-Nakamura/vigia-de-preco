@@ -58,6 +58,74 @@ def matches(title, watch):
             and not any(" " + words(term) + " " in normalized
                         for term in watch.get("exclude", "").split(",") if words(term)))
 
+def book_query(query):
+    normalized = words(query)
+    volume = re.search(r"\b(?:vol(?:ume)?|edicao)\s+(\d+)\b", normalized)
+    if not volume and re.search(r"\b(?:manga|livro|hq)\b", normalized):
+        volume = re.search(r"\b(\d+)$", normalized)
+    if not volume:
+        return None
+    stem = re.split(r"\s+[-–—]\s+|:", query, maxsplit=1)[0]
+    stem = re.sub(r"\b(?:vol(?:ume)?|edição)\.?\s+\d+\b", "", stem, flags=re.I)
+    parts = [word for word in words(stem).split() if word not in ("manga", "livro", "hq", "editora", "panini")]
+    if parts and parts[-1].isdigit() and int(parts[-1]) == int(volume[1]):
+        parts.pop()
+    if not parts:
+        return None
+    return parts, int(volume[1])
+
+
+def shopping_matches(title, watch):
+    query = watch["query"]
+    book = book_query(query)
+    if book:
+        stem, volume = book
+        normalized = " " + words(title) + " "
+        if not all(f" {term} " in normalized for term in stem):
+            return False
+        if re.search(r"\b(?:colecao|kit|combo|lote)\b|\b\d+\s+(?:ao?|ate)\s+\d+\b", normalized):
+            return False
+        volumes = re.findall(r"\b(?:vol(?:ume)?|edicao)\s+(\d+)\b", normalized)
+        if volumes:
+            valid = all(int(n) == volume for n in volumes)
+        else:
+            normalized_numbers = re.sub(r"(?<!\d)(?:97[89]\d{10}|\d{10})(?!\d)", "", normalized)
+            valid = any(int(n) == volume for n in re.findall(r"\b\d+\b", normalized_numbers))
+        return valid and not any(f" {words(term)} " in normalized
+                                for term in watch.get("exclude", "").split(",") if words(term))
+    normalized_title = re.sub(r"(?<!\d)0+(?=\d)", "", title)
+    normalized_query = re.sub(r"(?<!\d)0+(?=\d)", "", query)
+    return matches(normalized_title, {**watch, "query": normalized_query})
+
+
+def indexed_web_rows(data):
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        link = row.get("link")
+        if not store_link("meli", link) or not meli_publico.product_url(link, "https://www.mercadolivre.com.br"):
+            continue
+        rich = row.get("rich_snippet")
+        if not isinstance(rich, dict):
+            continue
+        for section in ("top", "bottom"):
+            block = rich.get(section)
+            if not isinstance(block, dict):
+                continue
+            detected = block.get("detected_extensions") or {}
+            price = cents(detected.get("price")) if isinstance(detected, dict) and detected.get("currency") in ("BRL", "R$") else None
+            if price is None:
+                extensions = block.get("extensions") or []
+                amounts = [m[1] for v in extensions if isinstance(v, str)
+                           and (m := re.fullmatch(r"R\$\s*([0-9.]+,[0-9]{2})", v.strip()))]
+                price = cents(amounts[0]) if len(amounts) == 1 else None
+            if price:
+                amount, centavos = divmod(price, 100)
+                yield {"title": row.get("title"), "link": link, "source": "Mercado Livre",
+                       "price": f"R$ {amount},{centavos:02d}", "extracted_price": price / 100, "web": True}
+                break
+
+
 def cents(value):
     try:
         if isinstance(value, str):
@@ -216,36 +284,65 @@ class Providers:
             seed = re.sub(r"^MLB-?\d+-?", "", slug[0], flags=re.I).replace("-", " ").strip()
             query = seed or exact
             search_watch = dict(watch, query=query)
-        search_query = f"{query} Mercado Livre" if store == "meli" else query
+        first_query = f"{query} Mercado Livre"
+        book = book_query(query)
+        if book:
+            terms, volume = book
+            short = " ".join(terms) + f" volume {volume}"
+        else:
+            short = query
+        web_query = f"site:mercadolivre.com.br {short}" + (f" {exact}" if exact else "")
+        attempts = [("google_shopping", first_query)]
+        if store == "meli":
+            attempts.extend([("google_shopping", short), ("google", web_query)])
+        offers = {}
+        for engine, term in attempts:
+            if len(offers) >= 2:
+                break
+            try:
+                rows = self.indexed_rows(engine, term, api_key)
+            except ProviderError:
+                if not offers:
+                    raise
+                break
+            for identity, offer in self.shopping_offers(store, rows, search_watch, exact, query).items():
+                offers.setdefault(identity, offer)
+        return list(offers.values())[:15]
+
+    def indexed_rows(self, engine, query, api_key):
         with self.shopping_lock:
-            key = (api_key, search_query.casefold())
+            key = (api_key, engine, query.casefold())
             old = self.shopping_cache.get(key)
             if old and old[0] > time.monotonic():
-                rows = old[1]
-            else:
-                url = query_url("https://serpapi.com/search.json", engine="google_shopping",
-                                q=search_query, gl="br", hl="pt", google_domain="google.com.br",
-                                api_key=api_key)
-                try:
-                    data = json_request(url)
-                except ProviderError as exc:
-                    hints = {401:"Chave da SerpApi inválida. Confira em Configurações.",
-                             403:"A SerpApi recusou a chave. Confira sua conta.", 429:"A SerpApi atingiu o limite de consultas."}
-                    raise ProviderError(hints.get(exc.status, "A SerpApi não respondeu à consulta."), status=exc.status) from None
-                if data.get("error"):
-                    raise ProviderError("O Google Shopping não pôde concluir a busca. Verifique a chave ou a cota da SerpApi.")
-                rows = data.get("shopping_results", [])
-                if not isinstance(rows, list):
-                    raise ProviderError("Resposta inesperada do Google Shopping.")
-                if len(self.shopping_cache) >= 100:
-                    self.shopping_cache.pop(next(iter(self.shopping_cache)))
-                self.shopping_cache[key] = (time.monotonic() + 300, rows)
+                return old[1]
+            url = query_url("https://serpapi.com/search.json", engine=engine, q=query, gl="br",
+                            hl="pt", google_domain="google.com.br", api_key=api_key)
+            try:
+                data = json_request(url)
+            except ProviderError as exc:
+                hints = {401:"Chave da SerpApi inválida. Confira em Configurações.",
+                         403:"A SerpApi recusou a chave. Confira sua conta.", 429:"A SerpApi atingiu o limite de consultas."}
+                raise ProviderError(hints.get(exc.status, "A SerpApi não respondeu à consulta."), status=exc.status) from None
+            error = data.get("error")
+            if error and "hasn't returned any results" not in str(error).casefold():
+                raise ProviderError("A SerpApi retornou um erro. Verifique a chave ou a cota.")
+            rows = data.get("shopping_results" if engine == "google_shopping" else "organic_results", [])
+            if not isinstance(rows, list):
+                raise ProviderError("Resposta inesperada da SerpApi.")
+            if engine == "google":
+                rows = list(indexed_web_rows(rows))
+            if len(self.shopping_cache) >= 100:
+                self.shopping_cache.pop(next(iter(self.shopping_cache)))
+            self.shopping_cache[key] = (time.monotonic() + 300, rows)
+            return rows
+
+    def shopping_offers(self, store, rows, watch, exact, query):
         results = {}
         for row in rows:
             if not isinstance(row, dict):
                 continue
             title = row.get("title") or ""
-            if not isinstance(title, str) or not title or (exact is None and not matches(title, search_watch)) or row.get("second_hand_condition"):
+            if not isinstance(title, str) or not title or (exact is None and not shopping_matches(title, watch)) or row.get("second_hand_condition"):
                 continue
             price_text = str(row.get("price", ""))
             if not re.match(r"^R\$\s*[\d.,]+\s*$", price_text):
@@ -285,17 +382,23 @@ class Providers:
                     and str(installment.get("price", "")).startswith("R$")):
                 installment_value = cents(installment.get("extracted_price"))
             freight = 0 if words(shipping_text) in ("frete gratis", "entrega gratis", "entrega gratuita") else None
-            note = "Preço indexado pelo Google Shopping. Confira o valor na loja."
+            source = "Busca do Google" if row.get("web") else "Google Shopping"
+            note = f"Preço indexado pela fonte {source}. Confira o valor na loja."
             item_key = direct or str(row.get("product_id") or title)[:300]
-            offer = make_offer(store, item_key, title, direct, price, old=previous,
-                               note=note, external=not bool(direct), provider="shopping",
+            if store == "meli" and direct:
+                parsed = urllib.parse.urlsplit(direct)
+                chosen = urllib.parse.parse_qs(parsed.query).get("item_id", [""])[0]
+                ids = re.findall(r"(?<![A-Za-z0-9])MLB-?\d+\b", parsed.path, re.I)
+                item_key = (chosen if re.fullmatch(r"MLB-?\d+", chosen, re.I) else ids[-1]).upper().replace("-", "")
+            offer = make_offer(store, direct or item_key, title, direct, price, old=previous,
+                               note=note, external=not bool(direct), provider="shopping", indexed_source=source,
                                installments=installment_count if installment_value else None,
                                installment_value=installment_value, shipping_text=shipping_text,
                                shipping_estimate=freight)
             if not direct:
                 offer["url"] = google
             results.setdefault(item_key, offer)
-        return list(results.values())[:15]
+        return results
 
     def meli_headers(self):
         cfg = self.cfg

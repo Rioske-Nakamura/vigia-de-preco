@@ -353,7 +353,7 @@ class App:
                 amount, offer, note = min(candidates, key=lambda x: x[0])
                 state["alerts"].insert(0, dict(price=amount, name=watch["name"], title=offer["title"],
                     store=offer["store"], url=offer["url"], watch=watch_id, time=now(), mode=watch["mode"], external=offer.get("external", False),
-                    id=uuid4().hex, read=False, note=note, provider=offer.get("provider"), target_scope=watch.get("target_scope", "delivery")))
+                    id=uuid4().hex, read=False, note=note, provider=offer.get("provider"), indexed_source=offer.get("indexed_source"), target_scope=watch.get("target_scope", "delivery")))
                 del state["alerts"][200:]
             watch[flag] = bool(candidates)
 

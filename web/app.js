@@ -152,7 +152,7 @@ function dashboard() {
     </div><div id="watch-list">${watchList()}</div>` : `<div class="card empty">
       <div class="examples">${EXAMPLES.map(([title, cat], i) => button("example", icon(ICONS[CATEGORIES.indexOf(cat)]) + `<span>${esc(title)}<small>${cat}</small></span>`, "example", `data-index="${i}"`)).join("")}</div>
     </div>`}
-    <div class="sourcebar">${shop("meli")} <span>${state.shopping_enabled ? "Google Shopping · sem navegador" : "Consulta à página pública"}</span></div>
+    <div class="sourcebar">${shop("meli")} <span>${state.shopping_enabled ? "Índice do Google · sem navegador" : "Consulta à página pública"}</span></div>
   </section>`;
 }
 
@@ -167,7 +167,7 @@ function searchPanel() {
   ));
   const status = scans.meli;
   const resultsText = status.state === "error" ? status.message : status.method === "shopping"
-    ? (rows.length ? `${rows.length} oferta(s) do Mercado Livre no Google Shopping.` : "Nenhuma oferta do Mercado Livre encontrada no Google Shopping.")
+    ? (rows.length ? `${rows.length} oferta(s) indexada(s) do Mercado Livre.` : "Nenhum preço do Mercado Livre encontrado no índice. Tente o nome e o volume, ou o link direto do anúncio.")
     : rows.length ? `${rows.length} oferta(s) na página ${status.imported ? "salva do" : "do"} Mercado Livre.` : "Nenhuma oferta compatível nesta página.";
   return `<section id="search-results" class="card search-results" aria-labelledby="results-title">
     <div class="section-head"><div><h2 id="results-title">${esc(query)}</h2><p>${esc(resultsText)}</p></div>
@@ -230,7 +230,7 @@ function watchRow(id, w) {
   ${w.stores.filter(s => s === "meli").map(s => {
     const log = state.scans[id]?.[s];
     const desc = !state.sources[s] ? "Consulta automática pausada nesta loja" : !log ? "Aguardando consulta" :
-      log.state === "ok" ? `${log.count} resultado(s)${log.method === "shopping" ? " · Google Shopping" : ""} · ${stamp(log.time)}` : log.message + " · " + stamp(log.time);
+      log.state === "ok" ? `${log.count} resultado(s)${log.method === "shopping" ? " · Índice do Google" : ""} · ${stamp(log.time)}` : log.message + " · " + stamp(log.time);
     return `<div class="source-line">${shop(s)} ${link(w.links[s], "Abrir no Mercado Livre")} <span>${esc(desc)}</span></div>`;
   }).join("")}
   ${w.stores.includes("meli") ? importControl(id) : ""}
@@ -324,7 +324,7 @@ function alerts() {
       </div>${link(a.url,STORES[a.store])}</article>` :
       `<article class="card alert-row">${icon("↘","green")}
       <div class="info"><strong>${esc(a.name)} · ${cur(a.price)}</strong> ${a.read ? "" : badge("Novo","ok")} ${a.note ? badge("Provisório", "warn") : ""}
-      <p>${esc(a.title)} · ${a.mode === "cash" ? "À vista" : "Parcelado"}${a.target_scope === "product" ? " · sem frete" : ""}${a.provider === "shopping" ? " · Google Shopping" : ""} · ${stamp(a.time)}${a.note ? " · " + esc(a.note) : ""}</p></div>
+      <p>${esc(a.title)} · ${a.mode === "cash" ? "À vista" : "Parcelado"}${a.target_scope === "product" ? " · sem frete" : ""}${a.provider === "shopping" ? " · " + esc(a.indexed_source || "Índice do Google") : ""} · ${stamp(a.time)}${a.note ? " · " + esc(a.note) : ""}</p></div>
       ${link(a.url, a.external ? "Google Shopping" : STORES[a.store])}</article>`).join("")}</div>` :
       '<div class="card empty"><h3>Nenhum alerta ainda</h3><p>Defina um preço-alvo ou aguarde os cupons anunciados nos itens em vigia.</p></div>');
 }
